@@ -1,0 +1,5 @@
+#!/bin/bash
+# drupalorg-cli wrapper for CONTRIB_WORKBENCH
+# Runs drupalorg.phar via Docker PHP (no host PHP required)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec docker run --rm -v "$SCRIPT_DIR:/app" -w /app php:8.3-cli php drupalorg.phar "$@"

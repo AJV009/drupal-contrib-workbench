@@ -1,0 +1,6 @@
+I recently ran "/drupal-issue" for https://www.drupal.org/project/ai_provider_litellm/issues/3579478
+I need you to inspect and go through its session, you can find in a jsonl file deep somewhere in the .claude folder
+And then identify things in the session that could have been optimized and improved.
+Also inspect all the agents and skills we developed and put in the .claude folder of this current directory.
+Don't make any direct changes, just identify all the issues, areas for improvements and then give me ideas on how we could improve the agents and skills to make certain discoveries, processes and findings faster or better and more efficient and with more depth and understanding?
+Also I am looking forward to being able to just run everything handless until the point it needs my permission to push to the issue fork.

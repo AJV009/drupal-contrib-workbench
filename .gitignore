@@ -1,0 +1,17 @@
+# Issue workspaces (large, per-issue DDEV envs + artifacts)
+DRUPAL_ISSUES/*
+!DRUPAL_ISSUES/.gitkeep
+
+# Temp workspace
+TEMP/*
+!TEMP/.gitkeep
+
+# Secrets
+*.key
+
+# Python
+__pycache__/
+*.pyc
+
+# Runtime
+tui.json
