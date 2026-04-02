@@ -1,6 +1,6 @@
 ---
 name: drupal-issue-fetcher
-description: Fetches all data for a drupal.org issue via APIs and stores structured artifacts. Use when starting work on any drupal.org issue to pull metadata, comments, MRs, diffs, and review threads into DRUPAL_ISSUES/{issue_id}/artifacts/.
+description: Fetches all data for a drupal.org issue via APIs and stores structured artifacts. Use when starting work on any drupal.org issue to pull metadata, comments, MRs, diffs, and inline review discussions into DRUPAL_ISSUES/{issue_id}/artifacts/.
 model: haiku  # Pure API calls and file writing; speed over reasoning
 tools: Read, Bash, Glob, Grep, Write
 ---
@@ -39,7 +39,7 @@ Read `{OUTPUT_DIR}/fetch-log.json` and check:
 1. **No errors**: `errors` array should be empty
 2. **Comment count**: Read `issue.json` field `comment_count`, then check `comments.json` field `total_count`. They should be close (within 2, since new comments may arrive between requests).
 3. **MRs have diffs**: For each MR in `merge-requests.json` with `state: "opened"`, verify a corresponding `mr-{iid}-diff.patch` file exists.
-4. **Notes fetched**: If gitlab token was available, for each open MR verify `mr-{iid}-notes.json` exists.
+4. **Discussions fetched**: If gitlab token was available, for each open MR verify `mr-{iid}-discussions.json` exists.
 5. **Primary MR identified**: Check `merge-requests.json` has a non-null `primary_selection_reason`.
 
 ### Step 3: Handle failures
@@ -62,7 +62,7 @@ After validation passes, write `{OUTPUT_DIR}/files.index` as JSON containing:
 - `files` array: for each artifact file, include `name`, `type`, `size_bytes` (read actual file size), `fetched_at`
 - For comments.json: include `comment_count` and `pages_fetched`
 - For merge-requests.json: include `mr_count` and `primary_mr_iid`
-- For mr notes: include `note_count`
+- For mr discussions: include `discussion_count` and `inline_comment_count` (notes with type="DiffNote")
 - `errors` array (empty if complete)
 
 ### Step 4b: Discover Related Issues (Optional but Recommended)

@@ -337,6 +337,21 @@ For rebasing when needed:
 git fetch origin && git rebase BASE_BRANCH_NAME && git push --force-with-lease
 ```
 
+### SSH Remote Verification (Before Pushing)
+
+Before any `git push`, verify the remote uses SSH (not HTTPS). HTTPS remotes
+will prompt for credentials and fail in non-interactive contexts.
+
+```bash
+# Check current remote
+git remote -v
+
+# If remote is HTTPS (https://git.drupalcode.org/...), switch to SSH:
+git remote set-url origin git@git.drupal.org:issue/{project}-{issue_id}.git
+
+# Always use git.drupal.org (not git.drupalcode.org) for SSH — see SSH config.
+```
+
 ## Testing & Verification References
 
 Every fix MUST include tests. The following reference docs are bundled:

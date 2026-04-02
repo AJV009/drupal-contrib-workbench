@@ -268,9 +268,56 @@ ddev drush watchdog:show --count=5 --severity=3 --format=json
 
 Compare the error message with what the issue reports.
 
+## Step 4.5: Pre-Work Gate (optional)
+
+If `--pre-work-gate` was passed through from `/drupal-issue`, STOP here and present
+a summary before auto-continuing. This gate only applies when the next step would
+be writing a code fix (categories A, B with issues, C, E with scope escalation, G).
+Skip it for comment-only outcomes (MR verified, cannot reproduce, just reply).
+
+### What to present
+
+```
+===========================================================
+  PRE-WORK GATE - Issue #{issue_id}
+===========================================================
+
+Classification: {letter} ({description})
+Module: {module_name} ({version})
+DDEV: {running_url or "not needed"}
+
+Reproduction: {CONFIRMED / NOT REPRODUCED / N/A}
+  - {one-line summary of what was found}
+
+Static Review Findings:
+  - {bullet points from parallel code review, if any}
+
+Existing MRs: {summary of active MRs or "None"}
+Preflight: {upstream fix status}
+
+Suggested Actions:
+  1. [PROCEED] Write fix + kernel test (recommended)
+  2. [COMMENT] Just post findings, no code fix
+  3. [ADJUST]  Change approach — describe what you want
+  4. [ABORT]   Stop here
+
+What would you like to do?
+===========================================================
+```
+
+Wait for the user's response, then:
+- **PROCEED**: Continue to `/drupal-contribute-fix` as normal
+- **COMMENT**: Invoke `/drupal-issue-comment` with the findings
+- **ADJUST**: Read the user's freeform text, treat it as the new approach directive,
+  then continue to `/drupal-contribute-fix` with that guidance
+- **ABORT**: Stop. Do not invoke any further skills.
+
+If `--pre-work-gate` was NOT passed, skip this step entirely and auto-continue.
+
 ## Step 5: Auto-Continue to Next Phase
 
-After reproduction/testing is complete, automatically continue. Do NOT ask the user.
+After reproduction/testing is complete (and after the pre-work gate, if enabled),
+automatically continue. Do NOT ask the user (unless the pre-work gate is active).
 
 | Outcome | Auto-Action |
 |---------|-------------|

@@ -71,6 +71,35 @@ The `/drupal-issue` workflow runs **hands-free from invocation to push gate**. T
 - Do NOT create all tasks upfront. Create them lazily as you start each phase.
 - Auto-chain: issue -> review -> fix -> comment -> push gate (stop).
 
+### Pre-Work Gate (optional)
+
+When `--pre-work-gate` is passed (via `./drupal-issue.sh <id> --gate`), the workflow
+adds a second stop point AFTER analysis/reproduction but BEFORE writing any code fix.
+This lets the user review findings and steer the approach. See `/drupal-issue-review`
+Step 4.5 for the gate format and user options.
+
+Flow with gate: issue -> review -> **PRE-WORK GATE (stop)** -> fix -> comment -> push gate (stop).
+Flow without gate (default): issue -> review -> fix -> comment -> push gate (stop).
+
+### Additional Instructions
+
+The shell script supports `-i "instructions"` to inject session-level guidance.
+These appear as an `ADDITIONAL INSTRUCTIONS` preamble in the prompt. Apply them
+throughout all phases and companion skill invocations. Do not repeat them to the user.
+
+### Shell Entry Point
+
+```bash
+./drupal-issue.sh <issue_id_or_url> [--gate] [-i "additional instructions"]
+
+# Examples:
+./drupal-issue.sh 3579079
+./drupal-issue.sh 3579079 --gate
+./drupal-issue.sh 3579079 -i "focus on the entity access bug only"
+./drupal-issue.sh 3579079 --gate -i "use approach from comment #7"
+./drupal-issue.sh https://www.drupal.org/i/3579079 -i "ignore JS warnings"
+```
+
 ## Skills — Auto-Invoke Rules
 
 Skills MUST be invoked automatically via the Skill tool when their trigger conditions match. Do NOT wait for the user to type the slash command — if the condition matches, invoke it.
@@ -178,6 +207,7 @@ Each workflow phase should write a state file to `DRUPAL_ISSUES/{issue_id}/workf
 | Phase | File | Content |
 |-------|------|---------|
 | Classification | `00-classification.json` | Action type, rationale, next skill |
+| Pre-work gate | `00b-pre-work-gate.json` | Findings summary, user decision (if gate enabled) |
 | Review findings | `01-review-findings.md` | Static review results, test coverage gaps |
 | Verification | `02-verification-results.json` | PHPCS, test, reviewer, verifier results |
 | Push gate | `03-push-gate-summary.md` | Complete summary for user review |

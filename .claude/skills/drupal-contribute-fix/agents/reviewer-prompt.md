@@ -38,6 +38,15 @@ Read all changed files. Do NOT review from memory or the dispatch summary.
 - [ ] Error handling is appropriate
 - [ ] Edge cases considered
 
+### Documentation / Content Accuracy (for doc changes)
+- [ ] Factual claims about services, methods, or behavior match the actual source code
+- [ ] Use cases described are accurate (not conflating related but distinct concepts)
+- [ ] Links to other docs/APIs are valid and point to the right anchors
+
+### File Placement (for new files)
+- [ ] New files placed in the project's canonical directory for their type (check where the MAJORITY of similar files live, not just the nearest one)
+- [ ] Not placed in quarantine/legacy directories (names like "Jail", "legacy", "deprecated") without explicit justification
+
 ## Report Format
 
 Report one of:

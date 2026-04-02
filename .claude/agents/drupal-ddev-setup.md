@@ -82,9 +82,12 @@ ddev composer require drupal/{module}:{version} {all_drupal_deps} {all_external_
 
 ### Phase 3b: Fork Mode
 
+**IMPORTANT:** Always use SSH with `git.drupal.org` (not `git.drupalcode.org`) for clone and push.
+The SSH host alias is configured in `~/.ssh/config`. HTTPS remotes will fail on push.
+
 ```bash
-# Clone the issue fork
-git clone git@git.drupalcode.org:issue/{project}-{issue_id}.git web/modules/contrib/{module}
+# Clone the issue fork via SSH
+git clone git@git.drupal.org:issue/{project}-{issue_id}.git web/modules/contrib/{module}
 cd web/modules/contrib/{module}
 git checkout {mr_source_branch}
 cd ../../../..

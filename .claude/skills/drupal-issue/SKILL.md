@@ -20,7 +20,7 @@ metadata:
 The "figure out what to do" skill. Reads a d.o issue, understands the full
 context, and takes the right action.
 
-Invoke: `/drupal-issue <issue-url-or-number>`
+Invoke: `/drupal-issue <issue-url-or-number> [--pre-work-gate]`
 
 ## What this skill does
 
@@ -43,6 +43,26 @@ Rules:
 - Do NOT wait for user confirmation between phases. Auto-chain to the next skill.
 - The workflow stops ONCE: at the push gate in `/drupal-contribute-fix`.
 - If there is nothing to push (review-only, comment-only), stop when presenting the draft comment for user review.
+
+### Pre-Work Gate (optional)
+
+If the invocation includes `--pre-work-gate`, the workflow gains an additional stop
+point AFTER analysis/reproduction but BEFORE writing any code fix. This lets the
+user review findings and steer the approach before the agent invests time in a fix.
+
+When `--pre-work-gate` is present:
+- Pass it through when delegating to `/drupal-issue-review`
+- `/drupal-issue-review` will present the pre-work gate and wait for user input
+- The user chooses: proceed with fix, comment only, adjust approach, or abort
+- After the user responds, the workflow resumes hands-free until the push gate
+
+When `--pre-work-gate` is NOT present (default): fully hands-free as before.
+
+### Additional Instructions
+
+If the prompt includes a preamble starting with `ADDITIONAL INSTRUCTIONS`, treat
+it as session-level guidance. Apply these instructions throughout all phases and
+when delegating to companion skills. Do not repeat them back to the user.
 
 ## Controller Pattern (Context Management)
 
@@ -96,7 +116,7 @@ The artifacts are at `DRUPAL_ISSUES/{issue_id}/artifacts/`:
 - `comments.json` for the complete comment thread (numbered, chronological)
 - `merge-requests.json` for all MRs with the primary MR flagged
 - `mr-{iid}-diff.patch` for MR diffs
-- `mr-{iid}-notes.json` for GitLab review threads
+- `mr-{iid}-discussions.json` for GitLab review discussions (general comments + inline diff comments with file/line positions)
 
 ## Step 1: Read the issue
 
@@ -126,6 +146,7 @@ Read the artifacts instead of scrolling the browser:
 - `artifacts/comments.json` for the full comment thread (already numbered and chronological)
 - `artifacts/merge-requests.json` for MR details and the primary MR flag
 - `artifacts/mr-{iid}-diff.patch` for MR diffs
+- `artifacts/mr-{iid}-discussions.json` for MR review discussions — read these **in conjunction with** `comments.json` to get the full picture. Issue comments capture the high-level thread on drupal.org, while MR discussions capture inline code review feedback on specific files/lines in GitLab. Both are needed for complete understanding of what reviewers asked for and what was addressed.
 - Use the browser ONLY for: viewing screenshots, visual verification, or when artifacts are incomplete
 
 ### When artifacts are NOT available (Step 0 failed)
@@ -141,6 +162,30 @@ Fall back to the original browser-based approach described above.
 - Is there a **parent issue**? What's its status?
 - Are there **blocking issues** or **related issues** that provide context?
 - What **version/branch** is this targeting?
+
+### Verify claims against source code (especially AI-generated issues)
+
+If the issue describes **what code does** (service behavior, method signatures,
+configuration effects), don't take it at face value. Read the actual source files
+and verify:
+
+- Does the service/method actually work as described?
+- Are the use cases described accurate, or does the description conflate similar
+  but distinct concepts? (e.g., "structured output" vs "extracting from unstructured text")
+- Are function signatures, parameter names, and return types correct?
+- For **structural/placement changes** (nav entries, config organization, menu
+  hierarchy): check how existing files already reference or cross-link the items
+  being placed. Filesystem path alone is not a reliable indicator of where
+  something belongs conceptually. Read the surrounding documentation to understand
+  the project's information architecture before deciding placement.
+
+This is especially important for issues tagged "[x] AI Assisted Issue" or
+"[x] AI Generated Code", where descriptions often sound authoritative but
+contain subtle inaccuracies.
+
+**Rule of thumb:** If you will write code or documentation based on an issue's
+description of how something works, read the source file first. 30 seconds of
+verification prevents a "Needs work" round-trip.
 
 ## Step 2: Classify the action needed
 
@@ -212,6 +257,14 @@ A maintainer commented asking to retarget to a different version or branch.
 A reviewer or maintainer left specific feedback.
 
 **Action:** Address each point, then stop before push for user confirmation.
+
+**Scope escalation:** If addressing the feedback requires creating NEW files
+or rewriting existing files from scratch (not just editing a few lines),
+escalate to the full skill chain: invoke `/drupal-contribute-fix` to package
+the result. A rewrite is not "responding to feedback"; it is writing new code
+that needs the reviewer and verifier gates. The threshold: if you are writing
+more than ~30 lines of new code, or placing files in directories you haven't
+verified against the project's canonical structure, escalate.
 
 ### F) Just reply with context
 The issue just needs a knowledgeable reply.

@@ -7,7 +7,7 @@ Orchestrates the drupal.org and GitLab APIs to produce:
   - comments.json     (all comments with system message detection)
   - merge-requests.json (MRs with primary selection heuristic)
   - mr-{iid}-diff.patch (plain diffs for open/merged MRs)
-  - mr-{iid}-notes.json (GitLab notes if token available)
+  - mr-{iid}-discussions.json (GitLab discussions: general + inline diff comments)
   - fetch-log.json    (request tracking)
 """
 
@@ -610,19 +610,19 @@ def main():
             except Exception as e:
                 log.error(f"mr-{iid}-diff.patch", str(e))
 
-    # 7. Fetch MR notes if token is available
+    # 7. Fetch MR discussions (general + inline diff comments) if token is available
     if gl.token:
         for mr in mrs:
             if mr.get("state") in ("opened", "merged"):
                 iid = mr["iid"]
                 try:
-                    notes = log.track(
-                        f"notes_{iid}",
-                        lambda m_iid=iid: gl.get_mr_notes(project, m_iid),
+                    discussions = log.track(
+                        f"discussions_{iid}",
+                        lambda m_iid=iid: gl.get_mr_discussions(project, m_iid),
                     )
-                    write_json(out_dir / f"mr-{iid}-notes.json", notes)
+                    write_json(out_dir / f"mr-{iid}-discussions.json", discussions)
                 except Exception as e:
-                    log.error(f"mr-{iid}-notes.json", str(e))
+                    log.error(f"mr-{iid}-discussions.json", str(e))
 
     # 8. Write fetch log
     log.finalize()

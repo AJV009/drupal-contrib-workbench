@@ -249,9 +249,14 @@ class GitLabAPI:
         except urllib.error.URLError as e:
             raise GitLabAPIError(f"Network error: {e.reason}")
 
-    def get_mr_notes(self, project: str, iid: int) -> List[Dict]:
+    def get_mr_discussions(self, project: str, iid: int) -> List[Dict]:
         """
-        Get all notes (comments) on a merge request.
+        Get all discussions on a merge request.
+
+        Returns both general comments and inline diff comments (DiffNote).
+        This is a superset of the /notes endpoint — it includes everything
+        /notes returns plus inline code review comments with position data
+        (file path, line number, diff context).
 
         Requires authentication (PRIVATE-TOKEN).
 
@@ -260,21 +265,19 @@ class GitLabAPI:
             iid: Merge request IID.
 
         Returns:
-            List of note dicts sorted by creation date ascending.
+            List of discussion dicts. Each discussion contains a 'notes' array.
+            Inline comments have type="DiffNote" and a 'position' object with
+            old_path, new_path, old_line, new_line, and line_range fields.
 
         Raises:
             GitLabAPIError: If no token is configured.
         """
         if not self.token:
             raise GitLabAPIError(
-                "Authentication required: MR notes endpoint requires a PRIVATE-TOKEN. "
+                "Authentication required: MR discussions endpoint requires a PRIVATE-TOKEN. "
                 "Use GitLabAPI.from_token_file() or pass token to constructor."
             )
 
         encoded = self._encode_project(project)
-        endpoint = f"projects/{encoded}/merge_requests/{iid}/notes"
-        params = {
-            'sort': 'asc',
-            'order_by': 'created_at',
-        }
-        return self._request(endpoint, params, paginate=True)
+        endpoint = f"projects/{encoded}/merge_requests/{iid}/discussions"
+        return self._request(endpoint, paginate=True)

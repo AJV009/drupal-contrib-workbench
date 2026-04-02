@@ -15,18 +15,43 @@ done
 
 # --- Argument validation ---
 if [[ $# -lt 1 ]]; then
-  echo "Usage: drupal-issue.sh <issue_id_or_url> [objective]" >&2
+  echo "Usage: drupal-issue.sh <issue_id_or_url> [options]" >&2
+  echo "" >&2
+  echo "Options:" >&2
+  echo "  --gate, -g                 Enable pre-work gate (pause after analysis, before fix)" >&2
+  echo "  -i, --instructions \"...\"   Additional instructions for the AI session" >&2
   echo "" >&2
   echo "Examples:" >&2
   echo "  ./drupal-issue.sh 3579079" >&2
-  echo "  ./drupal-issue.sh 3579079 \"address review comments\"" >&2
+  echo "  ./drupal-issue.sh 3579079 --gate" >&2
+  echo "  ./drupal-issue.sh 3579079 -i \"focus on the entity access bug only\"" >&2
+  echo "  ./drupal-issue.sh 3579079 --gate -i \"use approach from comment #7\"" >&2
   echo "  ./drupal-issue.sh https://www.drupal.org/project/ai/issues/3579079" >&2
-  echo "  ./drupal-issue.sh https://www.drupal.org/i/3579079 \"rebase and fix\"" >&2
+  echo "  ./drupal-issue.sh https://www.drupal.org/i/3579079 -i \"ignore JS warnings\"" >&2
   exit 1
 fi
 
-INPUT="$1"
-OBJECTIVE="${2:-}"
+INPUT="$1"; shift
+GATE=false
+INSTRUCTIONS=""
+
+# --- Parse optional flags ---
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --gate|-g)
+      GATE=true; shift ;;
+    -i|--instructions)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: $1 requires a string argument." >&2
+        exit 1
+      fi
+      INSTRUCTIONS="$2"; shift 2 ;;
+    *)
+      echo "Error: Unknown argument '$1'" >&2
+      echo "Use --gate/-g or -i/--instructions \"...\"" >&2
+      exit 1 ;;
+  esac
+done
 
 # --- Extract numeric issue ID ---
 if [[ "$INPUT" =~ ^[0-9]+$ ]]; then
@@ -51,6 +76,17 @@ fi
 SESSION_ID=$(jq -r --arg id "$ISSUE_ID" '.[$id].session_id // empty' "$MAP_FILE")
 
 # --- Functions ---
+
+build_prompt_prefix() {
+  # Build the preamble that goes ABOVE the skill invocation
+  local prefix=""
+  if [[ -n "$INSTRUCTIONS" ]]; then
+    prefix="ADDITIONAL INSTRUCTIONS (apply throughout this entire session, across all skill invocations and agent dispatches): $INSTRUCTIONS
+
+"
+  fi
+  echo -n "$prefix"
+}
 
 write_tui_json() {
   local tmux_name issue_id issue_dir tui_file
@@ -86,10 +122,15 @@ launch_new_session() {
   local uuid
   uuid=$(uuidgen)
 
-  local prompt="/drupal-issue https://www.drupal.org/i/$ISSUE_ID"
-  if [[ -n "$OBJECTIVE" ]]; then
-    prompt="$prompt $OBJECTIVE"
+  local prefix
+  prefix=$(build_prompt_prefix)
+
+  local skill_cmd="/drupal-issue https://www.drupal.org/i/$ISSUE_ID"
+  if [[ "$GATE" == true ]]; then
+    skill_cmd="$skill_cmd --pre-work-gate"
   fi
+
+  local prompt="${prefix}${skill_cmd}"
 
   # Write mapping before launch
   local timestamp
@@ -105,6 +146,8 @@ launch_new_session() {
 
   clear
   echo "Starting new session for issue #$ISSUE_ID (session: $uuid)"
+  [[ "$GATE" == true ]] && echo "  Pre-work gate: ENABLED"
+  [[ -n "$INSTRUCTIONS" ]] && echo "  Instructions: $INSTRUCTIONS"
   write_tui_json "$ISSUE_ID"
   exec claude --allow-dangerously-skip-permissions --permission-mode bypassPermissions --session-id "$uuid" --name "issue-$ISSUE_ID" "$prompt"
 }
@@ -118,13 +161,14 @@ resume_session() {
                '.[$id].last_accessed = $ts' "$MAP_FILE")
   echo "$updated" > "$MAP_FILE"
 
-  local prompt="Refresh issue #$ISSUE_ID: use the drupal-issue-fetcher agent to pull latest comments and MR status into DRUPAL_ISSUES/$ISSUE_ID/artifacts/, summarize what changed since our last session."
-  if [[ -n "$OBJECTIVE" ]]; then
-    prompt="$prompt Then: $OBJECTIVE"
-  fi
+  local prefix
+  prefix=$(build_prompt_prefix)
+
+  local prompt="${prefix}Refresh issue #$ISSUE_ID: use the drupal-issue-fetcher agent to pull latest comments and MR status into DRUPAL_ISSUES/$ISSUE_ID/artifacts/, summarize what changed since our last session."
 
   clear
   echo "Resuming session for issue #$ISSUE_ID (session: $SESSION_ID)"
+  [[ -n "$INSTRUCTIONS" ]] && echo "  Instructions: $INSTRUCTIONS"
   write_tui_json "$ISSUE_ID"
   exec claude --allow-dangerously-skip-permissions --permission-mode bypassPermissions --resume "$SESSION_ID" --name "issue-$ISSUE_ID" "$prompt"
 }
