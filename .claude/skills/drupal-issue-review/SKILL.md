@@ -171,8 +171,35 @@ MR diff (if an MR exists). This requires NO running environment:
    - Proper exception handling (not swallowing errors)?
    - Entity ID constraints respected (64 char max for config entities)?
    - Input validation at system boundaries?
-3. **Test coverage gap analysis**: identify new/changed methods that need tests
-4. **Note findings** for use after DDEV is ready
+3. **Test coverage gap analysis**:
+   - Identify new/changed methods that need tests
+   - Check if the MR includes ANY test files. If a bug fix MR has zero
+     tests, flag it. A missing test is a bigger gap than a missing PHPDoc.
+   - **Discover project test infrastructure**: scan the module's `tests/`
+     directory and the parent project's `tests/` for base classes. Look for
+     `*TestBase.php`, `*TestCase.php`, `Base*Test*.php` files. Note what
+     they provide (screenshot capture, video recording, pre-configured
+     modules, trait helpers). Example: the AI module provides
+     `BaseClassFunctionalJavascriptTests` with built-in `takeScreenshot()`
+     and `videoRecording` support. If these exist, use them when writing
+     tests rather than building from scratch.
+4. **Premise and architectural check** (do this BEFORE deep code review):
+   - Does the issue claim something does NOT exist (no event, no hook, no
+     extension point)? Grep the parent module to verify the absence.
+   - Does the MR add a new event, hook, or service? Check if the parent
+     framework already provides a generic one that covers the use case.
+     Example: a submodule-specific pre-request event is unnecessary if
+     the parent module's ProviderProxy already dispatches one for all calls.
+   - If the premise is false, flag it immediately. Do not invest further
+     review effort on code built on a wrong foundation.
+5. **MR freshness check**: Compare file paths and context lines in the diff
+   against the current target branch. Look for signs the MR is stale:
+   - File paths in the diff that don't exist on the target branch (renamed upstream)
+   - Context lines in the diff that don't match the current file content
+   - Upstream commits touching the same files after the MR was last updated
+     (check `git log` on the target branch for the files in the diff)
+   If freshness is suspect, flag it before investing further review effort.
+6. **Note findings** for use after DDEV is ready
 
 When the DDEV agent completes (you will be notified), use its enriched report
 directly: it includes exact paths to phpunit/phpcs, module path, MR application
@@ -220,9 +247,23 @@ etc. If `drush en` fails with a missing dependency, `composer require` it and re
 
 To test WITH the fix applied:
 ```bash
-# Fetch the MR diff and apply it
 cd web/modules/contrib/{module}
-curl -L "https://git.drupalcode.org/project/{project}/-/merge_requests/{mr_id}.diff" | git apply
+# Always dry-run first to catch stale MRs before investing review effort
+curl -sL "https://git.drupalcode.org/project/{project}/-/merge_requests/{mr_id}.diff" -o /tmp/mr-{mr_id}.diff
+git apply --check /tmp/mr-{mr_id}.diff
+```
+
+If `--check` fails, the MR does not apply cleanly to the installed module version.
+Do NOT proceed with review. Instead:
+- Note the specific files/hunks that conflict
+- Check `git log` on the module to identify what changed upstream since the MR
+- Draft a comment (via `/drupal-issue-comment`) noting the MR needs a rebase,
+  listing the specific conflicts
+- Do NOT mark RTBC on a stale MR
+
+If `--check` passes:
+```bash
+git apply /tmp/mr-{mr_id}.diff
 ```
 
 To test WITHOUT the fix (reproduce the original bug), just use the module as-is.
@@ -278,6 +319,24 @@ screenshots/
 ```
 
 For the full command reference and patterns (form filling, auth persistence, diffing, etc.), see the `agent-browser` skill at `.claude/skills/agent-browser/SKILL.md`.
+
+### Visual verification when reviewing an existing MR with frontend changes
+
+When reviewing an existing MR (categories B, E, I) whose diff includes .css,
+.twig, .theme, or .js files, visual verification is part of reproduction/testing,
+not a separate gate. No extra stop point is added.
+
+1. After applying the MR, take screenshots of all affected pages at desktop (1280px)
+   and mobile (375px via `agent-browser set viewport 375 812`)
+2. Verify: icons render, positioning is correct, no overlapping elements, hover/focus
+   states work, responsive layout is intact
+3. If visual issues are found, they count as "issues found that need code fixes" in the
+   auto-continue decision (Step 5), which routes to `/drupal-contribute-fix`
+4. If visual verification passes, include screenshot paths in the comment draft
+
+Do NOT skip this for "simple CSS changes." The issue that prompted this rule was a
+single class rename that broke icon positioning and missed an entire component
+(Tools Library) that also needed updating.
 
 ### Check error logs
 

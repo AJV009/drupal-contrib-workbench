@@ -17,6 +17,8 @@ import os
 import re
 import sys
 import time
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -26,7 +28,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 LIB_DIR = SCRIPT_DIR.parent / "lib"
 sys.path.insert(0, str(LIB_DIR))
 
-from drupalorg_api import DrupalOrgAPI, get_status_label, get_priority_label
+from drupalorg_api import DrupalOrgAPI, get_status_label, get_priority_label, USER_AGENT
+from drupalorg_page_parser import DrupalOrgPageParser, PageFetchError
 from gitlab_api import GitLabAPI
 
 
@@ -79,6 +82,11 @@ def extract_mr_references(html_text):
             seen.add(link)
             refs.append(link)
     return refs
+
+
+
+# Note: fetch_nodechanges() was removed. Its functionality is now in
+# DrupalOrgPageParser which extracts comments + nodechanges in one pass.
 
 
 def is_system_message(comment):
@@ -534,22 +542,61 @@ def main():
     issue = transform_issue(raw, project)
     write_json(out_dir / "issue.json", issue)
 
-    # 2. Fetch all comments
-    raw_comments = log.track("comments", lambda: api.get_all_comments(issue_id))
-    comments, hidden_branches = process_comments(raw_comments)
+    # 2. Fetch comments: page-first, API-fallback.
+    #
+    # Primary: parse the rendered HTML page (one request). This gives us
+    # comment bodies, nodechanges (status/version/assignment/tags), and
+    # embedded images. The d.o API does not expose nodechanges at all.
+    #
+    # Fallback: if the page fetch fails, fall back to the comment API
+    # (which lacks nodechanges but still provides comment bodies).
+    page_parser = DrupalOrgPageParser()
+    comments = []
+    hidden_branches = set()
+    comments_source = "page"
 
-    # Backfill issue author name from first comment if available
+    try:
+        page_result = log.track(
+            "page_comments",
+            lambda: page_parser.fetch_and_parse(project, issue_id),
+        )
+        comments = page_result["comments"]
+
+        # Extract hidden branches from page-parsed comment bodies.
+        hidden_pattern = re.compile(
+            r"changed the visibility of the branch\s+(\S+)\s+to hidden"
+        )
+        for c in comments:
+            body = c.get("body_html", "")
+            if body:
+                for m in hidden_pattern.finditer(body):
+                    hidden_branches.add(m.group(1))
+
+    except (PageFetchError, Exception) as e:
+        log.error("page_comments", f"Page fetch failed, falling back to API: {e}")
+        comments_source = "api"
+
+        # Fallback: use comment API (no nodechanges, but bodies work).
+        try:
+            raw_comments = log.track(
+                "api_comments",
+                lambda: api.get_all_comments(issue_id),
+            )
+            comments, hidden_branches = process_comments(raw_comments)
+        except Exception as e2:
+            log.error("api_comments", f"API fallback also failed: {e2}")
+
+    # Backfill issue author name from first comment if available.
     if comments and issue["author"]["name"] is None:
         first_author = comments[0].get("author", {})
         if first_author.get("name"):
             issue["author"]["name"] = first_author["name"]
-            # Re-write issue.json with author name
             write_json(out_dir / "issue.json", issue)
 
     write_json(out_dir / "comments.json", {
         "issue_id": issue_id,
         "total_count": len(comments),
-        "pages_fetched": max(1, (len(comments) + 43) // 44),
+        "source": comments_source,
         "comments": comments,
     })
 

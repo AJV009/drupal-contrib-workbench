@@ -21,6 +21,18 @@ Issue descriptions (especially AI-generated ones) can sound authoritative while
 being subtly wrong. The spec reviewer should catch mismatches in both directions:
 code that doesn't match requirements, AND requirements that don't match reality.
 
+**Verify claimed absences with extra care.** If the issue says "no event exists,"
+"no extension point," or "module X bypasses Y entirely," grep for the thing
+that supposedly does not exist. Trace the call chain. A false absence claim
+means the entire MR may be solving a problem that does not exist. This is the
+single highest-value check the spec reviewer performs.
+
+Example: issue #3581952 claimed "ai_ckeditor does not dispatch any events
+before calling the AI provider." In reality, the AI module's ProviderProxy
+dispatches PreGenerateResponseEvent for ALL provider calls, including
+ai_ckeditor. The entire MR (new event class, JS entity parsing, form changes,
+controller changes, 7 plugin updates) was built on this false claim.
+
 ## Input
 
 You will be given:

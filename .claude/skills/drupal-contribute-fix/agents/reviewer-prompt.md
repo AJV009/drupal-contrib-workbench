@@ -38,6 +38,11 @@ Read all changed files. Do NOT review from memory or the dispatch summary.
 - [ ] Error handling is appropriate
 - [ ] Edge cases considered
 
+### Architectural Necessity (for new events, hooks, services, or extension points)
+- [ ] If the MR introduces a NEW event class, hook, or alter: does the parent module already dispatch a generic event that covers this use case? (e.g., the AI module's `PreGenerateResponseEvent` fires for ALL `ProviderProxy` calls, including submodule calls)
+- [ ] If a generic event exists: does it lack context that genuinely cannot be obtained another way, justifying the new event? (If the only difference is convenience, flag it.)
+- [ ] If the MR's stated motivation is "no extension point exists": verify that claim by grepping for event dispatchers in the call chain. Do not trust the issue description.
+
 ### Documentation / Content Accuracy (for doc changes)
 - [ ] Factual claims about services, methods, or behavior match the actual source code
 - [ ] Use cases described are accurate (not conflating related but distinct concepts)
@@ -46,6 +51,15 @@ Read all changed files. Do NOT review from memory or the dispatch summary.
 ### File Placement (for new files)
 - [ ] New files placed in the project's canonical directory for their type (check where the MAJORITY of similar files live, not just the nearest one)
 - [ ] Not placed in quarantine/legacy directories (names like "Jail", "legacy", "deprecated") without explicit justification
+
+### Frontend Impact (if diff touches .css, .twig, .theme, or .js files)
+- [ ] CSS changes preserve existing layout and positioning (no properties like `position`, `display`, `width` removed without equivalent replacement)
+- [ ] Twig class changes do not break JS selectors that bind to those classes
+- [ ] Shared/global CSS classes used correctly (check the base class definition for expected sizing, display, and state styles)
+- [ ] FLAG in report: "Verifier must include visual verification with screenshots at desktop and mobile viewports"
+
+This section is static analysis only. The reviewer does NOT open a browser.
+The flag tells the verifier agent to include screenshot evidence in its report.
 
 ## Report Format
 

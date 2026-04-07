@@ -365,6 +365,18 @@ Every fix MUST include tests. The following reference docs are bundled:
 
 Before writing any tests, analyze the diff to create a targeted test plan:
 
+0. **Discover project test infrastructure FIRST.** Before planning test
+   types, scan the module and parent project for existing test base classes:
+   ```bash
+   find web/modules/contrib/{module} -name "*TestBase*" -o -name "*Base*Test*" | head -10
+   find web/modules/contrib/{module} -path "*/tests/*" -name "*.php" | head -20
+   ```
+   Look for base classes that provide: screenshot/video capture, pre-configured
+   modules, helper traits, mock providers. Example: the AI module has
+   `BaseClassFunctionalJavascriptTests` with `takeScreenshot()` and
+   `videoRecording` support. Use project base classes when they exist
+   rather than building from `KernelTestBase` or `WebDriverTestBase` directly.
+
 1. For each file in the diff:
    - NEW file? Test all public methods.
    - MODIFIED file? Test only changed/added methods.
@@ -466,7 +478,24 @@ ddev exec phpunit [module_test_path]
 ```
 Required: 0 failures, 0 errors. If tests fail, fix and re-run.
 
-**Step 3: Reviewer Agent (MANDATORY, not optional)**
+**Step 3: Spec Reviewer Agent (MANDATORY for feature MRs and review-only flows)**
+
+Dispatch the `drupal-spec-reviewer` agent BEFORE the code reviewer. This agent
+verifies that the implementation matches the issue requirements AND that the
+issue's factual claims are accurate.
+
+- Pass: issue requirements (title, description, key comments), list of changed
+  files, what the implementer claims they did
+- Wait for: SPEC_COMPLIANT | SPEC_GAPS
+- If SPEC_GAPS: address gaps before proceeding to code review. If a gap reveals
+  a false premise (e.g., the issue claims no extension point exists but one does),
+  STOP and escalate to the user rather than continuing to review code built on
+  a wrong foundation.
+- Skip for: trivial bug fixes where the issue premise is a concrete error message
+  that you already reproduced. The spec reviewer adds value when the issue
+  describes architectural gaps, missing features, or how code "should" work.
+
+**Step 4: Reviewer Agent (MANDATORY, not optional)**
 
 ALWAYS dispatch the `drupal-reviewer` agent after code changes are complete.
 This is not conditional on change size. Every change gets reviewed.
@@ -476,20 +505,24 @@ This is not conditional on change size. Every change gets reviewed.
 - If NEEDS_WORK: fix issues, re-dispatch (max 2 iterations)
 - If CONCERNS: include in push gate summary for user to see
 
-**Step 4: Verifier Agent (MANDATORY, not optional)**
+**Step 5: Verifier Agent (MANDATORY, not optional)**
 
 ALWAYS dispatch the `drupal-verifier` agent after code changes are complete.
 Can run in parallel with the reviewer (use `run_in_background` for one).
 
 - Pass: module path, test file paths, DDEV project name
+- If diff includes .css, .twig, .theme, or .js files, add to the verifier prompt:
+  "Visual verification required. DDEV URL: https://d{issue_id}.ddev.site.
+  Take screenshots of affected pages at desktop and mobile viewports."
 - Wait for: VERIFIED | FAILED | BLOCKED
 - If FAILED: investigate, fix, re-dispatch (max 2 iterations)
 - If BLOCKED: report to user in push gate summary
 
-Both agents MUST report before the push gate is presented.
-Only push after all checks pass AND the user confirms (see Push Gate below).
+All three agents (spec, reviewer, verifier) MUST report before the push gate
+is presented. Only push after all checks pass AND the user confirms (see Push
+Gate below).
 
-**Step 5: Draft Issue Comment (automatic)**
+**Step 6: Draft Issue Comment (automatic)**
 
 Before presenting the push gate, invoke `/drupal-issue-comment` to draft a
 d.o comment summarizing the changes. Pass it: issue context, what was found,
@@ -511,11 +544,13 @@ After all checks pass, present a complete summary:
 2. **Changes made:** list all modified/created files with a one-line description each
 3. **Tests:** which tests were written, how many pass, test validation results (if run)
 4. **PHPCS:** output showing 0 errors, 0 warnings (fresh, not from memory)
-5. **Reviewer verdict:** APPROVED / NEEDS_WORK (if reviewer agent was dispatched)
-6. **Verifier verdict:** VERIFIED / FAILED (if verifier agent was dispatched)
-7. **Comment draft:** path to the `.html` comment file (if drafted via `/drupal-issue-comment`)
-8. **What will be pushed:** the branch name, remote, and commit message
-9. **Diff summary:** files changed with +/- line counts
+5. **Spec reviewer verdict:** SPEC_COMPLIANT / SPEC_GAPS (if dispatched)
+6. **Reviewer verdict:** APPROVED / NEEDS_WORK (if reviewer agent was dispatched)
+7. **Verifier verdict:** VERIFIED / FAILED (if verifier agent was dispatched)
+8. **Visual QA:** PASS with N screenshots / N/A (no frontend changes) (from verifier report)
+9. **Comment draft:** path to the `.html` comment file (if drafted via `/drupal-issue-comment`)
+10. **What will be pushed:** the branch name, remote, and commit message
+11. **Diff summary:** files changed with +/- line counts
 
 Then ask: **"Ready to push these changes to the issue fork? (yes/no)"**
 

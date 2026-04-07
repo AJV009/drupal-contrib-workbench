@@ -82,8 +82,15 @@ Before classifying or taking action, answer these questions internally:
 4. Did any maintainer comment? What did they say?
 5. Are there related/parent/blocking issues referenced? Have I read those?
 6. What branch/version is this targeting?
+7. Does the issue claim something does NOT exist (no event, no hook, no
+   extension point, "module X bypasses Y")? If yes, have I verified that
+   claim by grepping the source? This is a hard gate, not optional.
+8. If there are companion/blocking issues, do they share an assumption
+   with this issue? If yes, have I verified that shared assumption holds?
 
-If any answer is "no," go read more before proceeding.
+If any answer is "no," go read more before proceeding. Questions 7 and 8
+are part of the hands-free flow, not interruptions to it. Verifying a
+premise takes 60 seconds. Building on a false premise wastes hours.
 
 ### Rationalization Prevention
 
@@ -95,6 +102,8 @@ If any answer is "no," go read more before proceeding.
 | "Let me start coding, I'll check for existing fixes later" | Coding first, searching second = duplicate MRs. Always preflight. |
 | "The user just wants this done fast" | Fast and wrong wastes more time than thorough and right. |
 | "I already know what kind of issue this is" | Classify AFTER reading, not before. Assumptions miss context. |
+| "The issue says no extension point exists, so we need one" | Verify the absence first. The AI module's ProviderProxy dispatches events for ALL calls. Issue #3581952 was built on a false "no events" claim. |
+| "The MR code looks correct, so the approach must be right" | Correct code on a wrong premise is still wrong. Check the premise before the code. |
 
 ## Step 0: Fetch issue data
 
@@ -175,6 +184,20 @@ and verify:
   being placed. Filesystem path alone is not a reliable indicator of where
   something belongs conceptually. Read the surrounding documentation to understand
   the project's information architecture before deciding placement.
+- **For claimed gaps ("no event exists", "no extension point", "module X
+  bypasses Y entirely"):** verify the absence. Grep for the event, hook, or
+  service the issue claims is missing. Trace the actual call chain from the
+  entry point (controller, form, command) through to the provider/service call
+  and check every layer for dispatched events, hooks, or interceptors. A claim
+  that something does NOT exist requires more diligence than a claim about
+  what does exist, because it is harder to prove and easier to get wrong.
+- **For MRs that add new extension points (events, hooks, alter hooks):**
+  before reviewing the implementation, check whether the parent module already
+  provides a generic extension point that covers the use case. Example: the
+  AI module's `PreGenerateResponseEvent` fires for ALL provider calls via
+  `ProviderProxy`, including calls from submodules like ai_ckeditor. A
+  module-specific event is only justified if the generic event lacks required
+  context that cannot be obtained another way.
 
 This is especially important for issues tagged "[x] AI Assisted Issue" or
 "[x] AI Generated Code", where descriptions often sound authoritative but
@@ -184,19 +207,53 @@ contain subtle inaccuracies.
 description of how something works, read the source file first. 30 seconds of
 verification prevents a "Needs work" round-trip.
 
+**Rule of thumb (gaps):** If the issue claims something does NOT exist (no event,
+no hook, no extension point), spend 60 seconds grepping before accepting the
+claim. The cost of verifying an absence is a grep command. The cost of accepting
+a false absence claim is an entire MR built on a wrong premise (see #3581952).
+
 ## Step 2: Classify the action needed
 
 After reading, determine which category the issue falls into and **immediately
 take action**. Do not present the classification to the user or ask for confirmation.
 
+### MR Freshness Check (MANDATORY for categories B and I)
+
+Before deciding code-review-only vs full DDEV, verify the MR still applies
+to the current target branch. This takes under 30 seconds and prevents
+reviewing stale diffs:
+
+1. Clone the target branch (shallow):
+   `git clone --depth=1 -b {target_branch} https://git.drupalcode.org/project/{project}.git /tmp/mr-check-{issue_id}`
+2. Fetch the MR diff and dry-run apply:
+   `curl -sL "https://git.drupalcode.org/project/{project}/-/merge_requests/{mr_id}.diff" -o /tmp/mr-{mr_id}.diff`
+   `cd /tmp/mr-check-{issue_id} && git apply --check /tmp/mr-{mr_id}.diff`
+3. If `--check` **FAILS**: the MR is stale. Do NOT review the code. Instead:
+   - Classify as "MR needs rebase"
+   - Draft a comment (via `/drupal-issue-comment`) noting the MR no longer
+     applies cleanly, listing which files/hunks conflict
+   - Skip to `/drupal-issue-comment`. Do NOT mark RTBC.
+4. If `--check` **PASSES**: proceed with Review Mode Detection below.
+5. Clean up: `rm -rf /tmp/mr-check-{issue_id}`
+
+A passing GitLab pipeline does NOT guarantee the MR applies to current
+upstream. The pipeline runs against the MR's own branch base, which may
+be behind the target branch.
+
 ### Review Mode Detection (Code-Review-Only vs Full DDEV)
 
 For categories B (review MR) and I (re-review), determine if DDEV is needed:
-- **MR pipeline passing** + **feature request** (not bug) + **user said "review"** -> Code-review-only mode (no DDEV)
+- **MR pipeline passing** + **feature request** (not bug) + **user said "review"** + **diff has NO .css/.twig/.theme/.js files** -> Code-review-only mode (no DDEV)
 - **Bug report** or **need to reproduce** or **need to run tests** -> Full DDEV mode
+- **Diff includes .css, .twig, .theme, or .js files** -> Full DDEV mode (visual verification required, regardless of category)
 
 Code-review-only skips `/drupal-issue-review` DDEV phases and goes straight
 to static diff review + `/drupal-issue-comment`. This takes ~10 min vs ~25 min.
+
+CSS, Twig, and template changes cannot be verified by reading code alone.
+A single class rename can break icon positioning or miss entire components
+that also need updating. Always use Full DDEV mode when the diff touches
+frontend files so the verifier agent can take screenshots.
 
 ### Detecting Contrib/Core Bugs (When to Trigger /drupal-contribute-fix)
 
@@ -254,6 +311,14 @@ A maintainer commented asking to retarget to a different version or branch.
 A reviewer or maintainer left specific feedback.
 
 **Action:** Address each point, then stop before push for user confirmation.
+
+**Test check (mandatory for bug fixes):** Before pushing, check if the MR
+has test coverage for the bug scenario. If not, write one. A bug fix without
+a test that proves the bug existed is incomplete, regardless of how small the
+code change is. This applies even when responding to reviewer feedback on
+someone else's MR. Contributing a missing test is more valuable than
+paragraphs of code analysis in a comment. When in doubt, escalate to
+`/drupal-contribute-fix` which enforces the test gate.
 
 **Scope escalation:** If addressing the feedback requires creating NEW files
 or rewriting existing files from scratch (not just editing a few lines),
@@ -330,6 +395,22 @@ When comments reference other issues like `[#3491351]` or link to parent issues,
   need closing.
 - **"Blocked by #X"** — Check #X's status. If it's fixed, this one might
   be unblocked now.
+
+### Cross-reference validation for companion issues
+
+When two issues share a premise (e.g., "ai_ckeditor needs a new event" in
+#3581952 and "ai_context subscribes to that new event" in #3581955), verify
+the shared premise holds before reviewing EITHER issue independently. If you
+review and approve Issue A, then later review Issue B which depends on A's
+premise, you will miss the same flaw twice.
+
+Concrete check: if Issue B says "blocked by Issue A" or "consumes the event
+from Issue A," read Issue A's premise critically FIRST. If Issue A's premise
+is false, Issue B is also invalid regardless of how clean its code is.
+
+This was the failure pattern in #3581952/#3581955: both issues assumed
+ai_ckeditor lacked an extension point. We reviewed both independently and
+approved both without noticing the shared false premise.
 
 ## Working with MRs
 

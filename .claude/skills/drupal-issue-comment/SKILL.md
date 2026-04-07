@@ -87,6 +87,19 @@ contributors on the issue.
   Say it once, in the right place. No recap paragraphs.
 - **Don't pad with filler.** If your actual content is three sentences,
   the comment should be three sentences. Don't stretch it to look thorough.
+- **Don't narrate implementation details nobody asked for.** If you pushed
+  a commit, the diff shows what changed. Don't write paragraphs explaining
+  which method you called or why you chose one cache tag over another. One
+  sentence per change is enough: "Split the NULL/disabled branches in
+  blockAccess()" not a 200-word essay about addCacheableDependency behavior.
+  If a reviewer needs to understand the change, they will read the diff.
+- **Contribute substance, not commentary.** Instead of writing prose about
+  what someone else's code does, contribute something concrete: a test that
+  was missing, a reproduction script, a screenshot, a CI artifact link.
+  Marcus's comment "Added a functional js test" with video/screenshot links
+  moved the issue forward more than 2000 characters of cache tag analysis.
+  Ask yourself: "Does this comment move the issue closer to being committed,
+  or does it just show that I understood the code?" If the latter, cut it.
 
 ## Allowed HTML tags
 
