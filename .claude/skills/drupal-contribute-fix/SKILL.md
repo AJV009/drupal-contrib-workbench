@@ -23,6 +23,21 @@ metadata:
 
 > **IRON LAW (VERIFICATION):** NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE. Run PHPCS. Run tests. See them pass. Only then say "done."
 
+## Rules at a glance
+
+Read before every session. Details for each rule live further down.
+
+1. **Preflight first.** Run `preflight` mode before editing any contrib/core code (duplicate-MR guard, `modes/preflight.md`).
+2. **Read called APIs before calling them** in scanning/validation/transformation code. Docblocks lie; implementations don't. (Before You Begin Q7.)
+3. **TDD order.** Failing test -> minimal fix -> passing test. No exceptions.
+4. **Validate tests are not trivially true.** Stash source, re-run new tests, confirm they fail without the fix. (Testing Step 3.)
+5. **CI parity before push.** Run `scripts/local_ci_mirror.sh` (Step 0 of Pre-Push Quality Gate). Exit 0 required.
+6. **Dispatch spec + code + verifier agents** before presenting the push gate. All three must report. (Pre-Push Quality Gate Steps 3-5.)
+7. **Never auto-push.** Present the push gate summary and wait for explicit user confirmation. (Push Gate.)
+8. **Humility rules in comment drafts.** No "happy to change" hedges on incomplete work, no "separate follow-up" without the three-part pre-follow-up search, no self-congratulatory filler. (See `drupal-issue-comment` SKILL.md.)
+9. **Minimal fix for the full bug class**, not just the reported symptom. Enumerate input shapes before declaring done. (Minimal + Upstream Acceptable.)
+10. **Preserve contribution artifacts.** Never delete `.drupal-contribute-fix/`, `diffs/`, `REPORT.md`, or `ISSUE_COMMENT.md`, even if asked to "reset".
+
 ### Rationalization Prevention
 
 | Thought | Reality |
@@ -33,11 +48,51 @@ metadata:
 | "PHPCS is probably fine" | Run it. "Probably" is not evidence. |
 | "The user seems impatient, skip the review" | The user wants quality. Skipping review wastes their time later. |
 | "The preflight search will just slow us down" | Duplicate MRs waste maintainer time. 30 seconds of search saves hours. |
+| "The proper implementation is ~N lines, this 3-line shortcut is good enough" | Write the proper version before calling it too long. Line estimates without a draft are almost always wrong. The recursive walker in #3580690 was rationalized as "about 50 lines with two new helpers" in prose; it was ~20 lines with one helper when actually written. |
+| "This trade-off is acceptable for [the common case]" | Turn the trade-off into a failing test case with an adversarial input. If the test fails against your shortcut, the trade-off was actually a silent bug, not a trade-off. Prose justification is not evidence; a test is. #3580690's `json_encode` shortcut was justified as "safer failure mode for PII" — it was a silent bypass for every pattern targeting control chars, quotes, or backslashes. |
 | "should work", "probably fine", "seems correct" | RED FLAG. Run the verification command. Evidence, not assumptions. |
 
 **Use this skill for ANY Drupal contrib/core bug - even "local fixes".**
 
 Checks drupal.org before you write code, so you don't duplicate existing fixes.
+
+## Gotchas
+
+Environment-specific traps. Most of these have burned us at least once.
+
+- **`ChatMessage::getRenderedTools()` double-encodes arguments.** It calls
+  `Json::encode()` internally via `ToolsFunctionOutput::getOutputRenderArray()`.
+  Wrapping the result in another `json_encode()` produces `\"` and `\\`
+  escape artifacts that hide control chars, quotes, and backslashes from
+  regex scanning. Walk `$tool->getArguments()->getValue()` directly for
+  content inspection. (#3580690)
+- **PHPCS warnings do not fail Drupal CI.** CI runs phpcs with
+  `ignore_warnings_on_exit=1`. Local runs must match
+  (`--runtime-set ignore_warnings_on_exit 1`) or the push gate reports
+  false failures. `scripts/local_ci_mirror.sh` handles this automatically.
+- **Local cspell ≠ CI cspell.** The Drupal CI template ships a base
+  dictionary (`langcode`, `vid`, etc.) local `npx cspell` cannot replicate.
+  Run cspell only against files in your diff, not the whole tree.
+- **Never install `phpunit/phpunit` standalone.** It resolves to v12+ which
+  cannot load Drupal test base classes (`UnitTestCase`, `KernelTestBase`).
+  Use `ddev composer require --dev "drupal/core-dev:^11" -W` (bundles
+  PHPUnit 11). See CLAUDE.md "Dependency Rules".
+- **Never install `drupal/coder` standalone.** Conflicts with the coder 8
+  bundled inside `drupal/core-dev` and blocks the core-dev install.
+- **drupal.org `api-d7` endpoint rejects full-text search.** `text=` on
+  api-d7 returns HTTP 412. For keyword search use the UI:
+  `https://www.drupal.org/project/issues/search/<project>?text=<keywords>`.
+- **SSH remote: `git.drupal.org`, not `git.drupalcode.org`.** HTTPS remotes
+  prompt for credentials and fail in non-interactive sessions. Switch with
+  `git remote set-url origin git@git.drupal.org:issue/{project}-{issue_id}.git`.
+- **Rebasing MR branches is fine.** Drupal.org recommends rebase over merge.
+  Use `--force-with-lease`. The "X commits from branch" noise in GitLab is
+  expected and not a merge problem.
+- **`drupalorg` CLI is a phar at `./scripts/drupalorg`.** Not on `$PATH`.
+  Always call with the relative path from the workspace root.
+- **Test-validation stash recovery.** If `git stash pop` fails during
+  Testing Step 3, use `git checkout -- src/ config/ *.module *.install` to
+  restore from last commit. Do not try fancier recovery paths.
 
 ## Before You Begin
 
@@ -48,38 +103,21 @@ Before writing code or running preflight, answer these questions internally:
 4. Are there existing MRs on the issue I should build on (not duplicate)?
 5. Do I have reproduction steps clear enough to write a test?
 6. Is there a DDEV environment ready, or do I need `/drupal-issue-review` first?
+7. For every existing function I plan to call from scanning, validation, or transformation code: have I read its implementation (not just the docblock) to confirm what shape it returns and whether it applies transformations (JSON encoding, HTML escaping, normalization)? Hidden transformations inside called functions are the most common source of silent bypass bugs. #3580690 shipped a double-encoding bug because `getRenderedTools()` internally calls `Json::encode()` and the author never opened the file.
 
-If answers 1 through 3 are unclear, run preflight first. If 4 through 6 are unclear, read the issue more carefully.
+If answers 1 through 3 are unclear, run preflight first. If 4 through 6 are unclear, read the issue more carefully. If 7 is unclear, open the module source and read the called functions before writing the fix.
 
-## Preferred Companion Skill: drupalorg-cli (Highly Recommended)
+## Companions
 
-`drupal-contribute-fix` should focus on bug identification, triage quality, and report prep.
-Use `drupalorg-cli` for issue-fork, MR, and pipeline execution steps.
+This skill owns bug identification, TDD, tests, quality gates, and
+submission prep. For fork/remote/MR/pipeline execution use `drupalorg-cli`
+(`./scripts/drupalorg`, full reference in CLAUDE.md).
 
-Recommended split:
-
-- **This skill:** detect bug ownership, search/match upstream issues, build clear reproduction + test steps, prepare submission-ready notes.
-- **drupalorg-cli:** fork/remote setup, branch checkout, MR inspection, pipeline status/log checks, iterative push loop.
-
-Installed at `scripts/drupalorg` in the workspace root (v0.8.5 phar, runs via Docker PHP).
-
-```bash
-# From the workspace root:
-./scripts/drupalorg --version  # Drupal.org CLI 0.8.5
-./scripts/drupalorg issue:show 3579478 --format=llm
-```
-
-See CLAUDE.md for the full command reference.
-
-## Resolving Script Paths
-
-All script paths below are relative to this skill's root directory — NOT your current working directory. Before running any command, resolve the skill root once:
+Script paths in this skill are relative to the skill root, not CWD. Resolve once per session:
 
 ```bash
 for d in "$HOME/.agents/skills/drupal-contribute-fix" "$HOME/.codex/skills/drupal-contribute-fix"; do [ -f "$d/SKILL.md" ] && DCF_ROOT="$d" && break; done
 ```
-
-All commands below use `$DCF_ROOT`. You only need to run the line above once per session.
 
 ## FIRST STEP - Before Writing Any Code
 
@@ -107,183 +145,63 @@ If any verification step fails, treat it as a false positive and continue triage
 
 This takes 30 seconds and may save hours of duplicate work.
 
-**Important:** Drupal.org's `api-d7` endpoint does **not** support a full-text `text=` filter (it returns HTTP 412). If you need a manual keyword search link, use the Drupal.org UI search:
-
-```text
-https://www.drupal.org/project/issues/search/<project>?text=<keywords>
-```
-
-## Handoff After Triage (If No Code Changes Made)
-
-If triage-only (no local code change), preserve `preflight` evidence and provide:
-- The best-match issue(s)/MR(s)
-- Specific reproduction + expected behavior steps
-- Suggested `drupalorg-cli` commands to continue contribution work
-
-## NEVER DELETE Contribution Artifacts
-
-**DO NOT delete these files:**
-- `.drupal-contribute-fix/` directory
-- Diff files in `diffs/`
-- `ISSUE_COMMENT.md`
-- `REPORT.md`
-
-Even if the user asks to "reset" or "undo" the local fix, **preserve the contribution artifacts**
-so the fix can be submitted upstream. The whole point is to help the Drupal community.
+If triage-only (no local code change), preserve `preflight` evidence, provide
+best-match issue(s)/MR(s) + reproduction steps, and suggest `drupalorg-cli`
+commands to continue the contribution. Never delete `.drupal-contribute-fix/`,
+`diffs/`, `ISSUE_COMMENT.md`, or `REPORT.md` even on "reset" requests —
+those are the artifacts that get submitted upstream.
 
 ## Complete Workflow
 
 ```
 1. DETECT    → Error from contrib/core? Trigger activated.
-2. PREFLIGHT → Search drupal.org BEFORE writing code
+2. PREFLIGHT → Search drupal.org BEFORE writing code (mode: preflight)
 3. TRIAGE    → Verify/score candidates, avoid false positives
-4. PREP      → Produce report-quality repro/test steps and recommendation
-5. PACKAGE   → If code changed, run `package`; otherwise keep preflight evidence only
-6. HANDOFF   → Prefer `drupalorg-cli` for fork/MR/pipeline execution
-7. PRESERVE  → Keep .drupal-contribute-fix/ artifacts for follow-up
+4. FIX + TESTS → TDD cycle (test first, then minimal code, then validate)
+5. QUALITY GATES → PHPCS, CI parity, spec reviewer, code reviewer, verifier
+6. PACKAGE   → Generate artifacts (mode: package)
+7. PUSH GATE → Present summary, wait for user confirmation
+8. PRESERVE  → Keep `.drupal-contribute-fix/` for follow-up
 ```
 
-**Steps 4-7 are MANDATORY.** Don't stop at "issue found"; leave an actionable handoff.
+Steps 2-8 are all mandatory. Don't stop at "issue found"; drive through to
+push gate or a clean triage handoff.
 
-## What This Skill Does
+## Exit Codes
 
-1. **Searches drupal.org** for existing issues/MRs matching the bug (preflight)
-2. **Validates candidate relevance** before declaring "already fixed" (false-positive guard)
-3. **Writes the fix** following TDD (test first, then minimal code)
-4. **Writes tests** with diff-aware planning
-5. **Validates tests** are legitimate (stash/unstash)
-6. **Runs quality gates** (PHPCS, reviewer agent, verifier agent)
-7. **Generates contribution artifacts** (diff, report, comment draft)
-8. **Presents push gate** and waits for user confirmation
-
-## Mandatory Gatekeeper Behavior
-
-**No new local diff artifact may be generated until upstream search + "already fixed?" checks are complete.**
-**No "STOP existing fix found" decision may be accepted until the file-level verification steps above are completed.**
-
-The skill ends in exactly one of these outcomes:
+The skill ends in exactly one of these outcomes. No local diff artifact
+may be generated until upstream search and false-positive verification are
+both complete.
 
 | Exit Code | Outcome | Meaning |
 |-----------|---------|---------|
 | 0 | PROCEED | MR artifacts + local diff generated |
-| 10 | STOP | Existing upstream fix found (MR-based, historical patch attachments, or closed-fixed) |
-| 20 | STOP | Fixed upstream in newer version (reserved for future use) |
+| 10 | STOP | Existing upstream fix found (active MR, historical patch attachments, or closed-fixed) |
+| 20 | STOP | Fixed upstream in newer version (reserved) |
 | 30 | STOP | Analysis-only recommended (change would be hacky/broad) |
 | 40 | ERROR | Couldn't determine project/baseline, network failure |
-| 50 | STOP | Security-related issue detected (follow security team process) |
-
-**Workflow modes:** When an existing fix is found (exit 10), the skill reports whether the
-issue has an active MR or only historical patch attachments to guide contributor workflow.
-
-## Workflow Hygiene
-
-Always use **Merge Requests**, never patch uploads (unless maintainers explicitly request it).
-When available, use `drupalorg-cli` for fork/remote/branch/pipeline operations.
+| 50 | STOP | Security-related issue (follow security team process) |
 
 ## Commands
 
-### Preflight (search only)
+Full command reference (flags, examples, exit codes, gotchas) lives in the
+mode files. Open the one that matches your current phase:
 
-Search drupal.org for existing issues without generating local artifacts:
+| Mode | When | Reference |
+|------|------|-----------|
+| `preflight` | Before writing any code for a contrib/core bug | `modes/preflight.md` |
+| `package` | After the fix is written, to generate contribution artifacts | `modes/package.md` |
+| `test` | Testing someone else's MR for RTBC | `modes/test.md` |
+| `reroll` | Legacy patch workflow (only when maintainers request it) | `modes/reroll.md` |
 
-```bash
-python3 "$DCF_ROOT/scripts/contribute_fix.py" preflight \
-  --project metatag \
-  --keywords "TypeError MetatagManager::build" \
-  --paths "src/MetatagManager.php" \
-  --out .drupal-contribute-fix
-```
+All four invoke `$DCF_ROOT/scripts/contribute_fix.py` with the matching
+subcommand. `package` always runs `preflight` first and refuses to generate
+artifacts if an existing upstream fix is found (override with `--force`).
 
-### Package (search + generate)
-
-Search upstream AND generate contribution artifacts if appropriate:
-
-```bash
-# For web/ docroot layout:
-python3 "$DCF_ROOT/scripts/contribute_fix.py" package \
-  --root /path/to/drupal/site \
-  --changed-path web/modules/contrib/metatag \
-  --keywords "TypeError MetatagManager::build" \
-  --test-steps "Enable metatag" "Visit affected page" "Confirm fixed behavior" \
-  --out .drupal-contribute-fix
-
-# For docroot/ layout (common in Acquia/BLT projects):
-python3 "$DCF_ROOT/scripts/contribute_fix.py" package \
-  --root /path/to/drupal/site \
-  --changed-path docroot/modules/contrib/mcp \
-  --keywords "module not installed" "update_get_available" \
-  --test-steps "Set up failing config" "Trigger failing code path" "Confirm expected post-fix result" \
-  --out .drupal-contribute-fix
-```
-
-**Note:** `package` always runs `preflight` first and refuses to generate local artifacts
-if an existing fix is found (unless `--force` is provided).
-
-### Test (generate RTBC comment)
-
-Generate a Tested-by/RTBC comment for an existing MR or diff artifact you've tested:
-
-```bash
-python3 "$DCF_ROOT/scripts/contribute_fix.py" test \
-  --issue 3345678 \
-  --tested-on "Drupal 10.2, PHP 8.2" \
-  --result pass \
-  --out .drupal-contribute-fix
-```
-
-Options: `--result` can be `pass`, `fail`, or `partial`. Use `--mr` or `--patch`
-to specify which artifact you tested.
-
-### Reroll (legacy patch-only issues)
-
-Legacy fallback only: reroll an existing patch attachment when maintainers explicitly request patch workflow:
-
-```bash
-python3 "$DCF_ROOT/scripts/contribute_fix.py" reroll \
-  --issue 3345678 \
-  --patch-url "https://www.drupal.org/files/issues/metatag-fix-3345678-15.patch" \
-  --target-ref 2.0.x \
-  --out .drupal-contribute-fix
-```
-
-This downloads the patch, attempts to apply it to your target branch, and generates
-a rerolled patch if needed (or confirms it applies cleanly). Prefer MR workflow for new contributions.
-
-### Common Options
-
-| Option | Description |
-|--------|-------------|
-| `--project` | Drupal project machine name (e.g., `metatag`, `drupal`) |
-| `--keywords` | Error message fragments or search terms (space-separated) |
-| `--paths` | Relevant file paths (space-separated) |
-| `--out` | Output directory for artifacts |
-| `--offline` | Use cached data only, don't hit API |
-| `--force` | Override gatekeeper and generate local diff artifact anyway |
-| `--issue` | Known issue number (runs gatekeeper check against this issue) |
-| `--detect-deletions` | Include deleted files in diff (risky with Composer trees) |
-| `--test-steps` | **REQUIRED** Specific test steps for the issue (agent must provide) |
-
-### Test Steps (MANDATORY)
-
-**Agents MUST provide specific test steps via `--test-steps`.** Generic placeholders are not acceptable.
-
-```bash
-python3 "$DCF_ROOT/scripts/contribute_fix.py" package \
-  --changed-path docroot/modules/contrib/mcp \
-  --keywords "update module not installed" \
-  --test-steps \
-    "Enable MCP module with Update module disabled" \
-    "Call the general:status tool via MCP endpoint" \
-    "Before fix: Fatal error - undefined function update_get_available()" \
-    "After fix: JSON response with status unavailable" \
-  --out .drupal-contribute-fix
-```
-
-Test steps should:
-1. Describe how to set up the environment to reproduce the bug
-2. Describe the action that triggers the bug
-3. Describe the expected behavior BEFORE the fix (the bug)
-4. Describe the expected behavior AFTER the fix (the fix)
+**Test steps are mandatory** (`--test-steps` flag on `package`). Steps must
+describe: setup to reproduce, triggering action, pre-fix behavior (the bug),
+post-fix behavior (the fix). Generic placeholders are rejected. Full examples
+in `modes/package.md`.
 
 ## Output Files
 
@@ -337,148 +255,110 @@ For rebasing when needed:
 git fetch origin && git rebase BASE_BRANCH_NAME && git push --force-with-lease
 ```
 
-### SSH Remote Verification (Before Pushing)
+## Testing
 
-Before any `git push`, verify the remote uses SSH (not HTTPS). HTTPS remotes
-will prompt for credentials and fail in non-interactive contexts.
+Every fix MUST include kernel tests that fail against pre-fix code and pass
+against fixed code. Non-negotiable. See IRON LAWs above. Gate exists because
+of #3542457 (code-only push bounced as Needs Work).
+
+Reference docs (open when needed, not by default):
+- `references/testing-patterns.md` - PHPUnit patterns for Drupal
+- `references/smoke-testing.md` - Curl tests, drush eval, DDEV gotchas
+- `references/common-checks.md` - Common verification scenarios
+- `references/core-testing.md` - Core-specific patterns
+
+### Step 1: Plan from the diff (before writing test code)
+
+First, discover project test infrastructure:
+```bash
+find web/modules/contrib/{module} -name "*TestBase*" -o -name "*Base*Test*" | head -10
+find web/modules/contrib/{module} -path "*/tests/*" -name "*.php" | head -20
+```
+Look for base classes that provide screenshot/video capture, pre-configured
+modules, helper traits, or mock providers. Use project base classes when
+they exist rather than building from `KernelTestBase`/`WebDriverTestBase`
+directly. (E.g. the AI module provides `BaseClassFunctionalJavascriptTests`.)
+
+For each file in the diff: NEW file tests all public methods; MODIFIED file
+tests only changed/added methods; config file verifies schema/values; test
+file itself is skipped.
+
+For each changed/new method, identify: input types and edge cases,
+error/exception paths, dependencies needing mocks. Write the plan as a
+checklist first with specific assertions ("handles empty input", "propagates
+ConnectionException"), never vague placeholders ("test error handling").
+
+### Step 2: Write the tests, then the fix (TDD)
+
+Write the test, watch it fail, write the minimal fix, watch it pass. Then
+run the full module test suite to confirm no regressions, and PHPCS on all
+new/modified files.
+
+### Step 3: Validate tests are not trivially true
+
+After tests pass against fixed code, prove they actually test the behavioral
+change:
 
 ```bash
-# Check current remote
-git remote -v
+# 1. Stash source changes, keep tests in place
+git stash push -- src/ config/ *.module *.install
 
-# If remote is HTTPS (https://git.drupalcode.org/...), switch to SSH:
-git remote set-url origin git@git.drupal.org:issue/{project}-{issue_id}.git
+# 2. Run new/modified tests against unfixed code
+ddev exec ../vendor/bin/phpunit [new_test_files]
 
-# Always use git.drupal.org (not git.drupalcode.org) for SSH — see SSH config.
+# 3. Verify FAILURE (expected). Then restore.
+git stash pop
 ```
 
-## Testing & Verification References
+Results interpretation: all new tests fail = validated, tests are legitimate.
+Some pass without fix = those are trivially true (test setup, not behavioral
+change), rewrite them. All pass without fix = rewrite all. Max 2 rewrite
+cycles. Report in push gate summary: `Test Validation: N/M correctly fail
+without fix, K trivially passing`.
 
-Every fix MUST include tests. The following reference docs are bundled:
+Edge cases: test-only changes skip validation; config-only changes stash
+config files specifically; if `git stash pop` fails, `git checkout -- src/ config/`
+to restore from last commit.
 
-- `references/smoke-testing.md` - Curl smoke tests, drush eval patterns, DDEV shell gotchas, test script creation
-- `references/testing-patterns.md` - PHPUnit test patterns for Drupal
-- `references/common-checks.md` - Common verification scenarios
-- `references/core-testing.md` - Core testing patterns
-
-### Test Planning from Diff (BEFORE Writing Test Code)
-
-Before writing any tests, analyze the diff to create a targeted test plan:
-
-0. **Discover project test infrastructure FIRST.** Before planning test
-   types, scan the module and parent project for existing test base classes:
-   ```bash
-   find web/modules/contrib/{module} -name "*TestBase*" -o -name "*Base*Test*" | head -10
-   find web/modules/contrib/{module} -path "*/tests/*" -name "*.php" | head -20
-   ```
-   Look for base classes that provide: screenshot/video capture, pre-configured
-   modules, helper traits, mock providers. Example: the AI module has
-   `BaseClassFunctionalJavascriptTests` with `takeScreenshot()` and
-   `videoRecording` support. Use project base classes when they exist
-   rather than building from `KernelTestBase` or `WebDriverTestBase` directly.
-
-1. For each file in the diff:
-   - NEW file? Test all public methods.
-   - MODIFIED file? Test only changed/added methods.
-   - Config file? Verify schema/values.
-   - Test file? Skip (it IS a test).
-
-2. For each changed/new method, identify:
-   - Input types and edge cases
-   - Error/exception paths
-   - Dependencies that need mocking
-
-3. Write the test plan as a checklist BEFORE writing code:
-   ```
-   - [ ] ClassName::methodName() handles valid input
-   - [ ] ClassName::methodName() handles empty input
-   - [ ] ClassName::methodName() propagates ConnectionException
-   ```
-
-4. Each checklist item must include: method name, setup, assertion, and WHY.
-   No placeholders like "test error handling" (WHICH error? HOW handled?).
-
-### TEST COVERAGE GATE (NON-NEGOTIABLE)
-
-**Every code fix pushed to an MR MUST include kernel tests.** This applies to
-both core AND contrib modules in this workspace. Do not push code-only commits
-and assume tests can come later. Reviewers WILL send it back.
-
-Before marking any fix work as complete:
-1. Write kernel tests that cover each behavioral change
-2. Verify the tests FAIL against the pre-fix code
-3. Verify the tests PASS against the fixed code
-4. Run the full module test suite to confirm no regressions
-5. Run PHPCS on all new/modified files
-
-This gate was added after issue #3542457 where code fixes were pushed without
-tests and jibran had to send the MR back to "Needs work" for missing test
-coverage. That round-trip wasted time for everyone.
-
-### Test Validation (MANDATORY - Proves Tests Are Legitimate)
-
-After all tests pass against the fixed code, validate they are not trivially true:
-
-1. **Identify source changes** (not test files):
-   ```bash
-   # Get list of changed source files (exclude test files)
-   git diff --name-only -- 'src/' 'config/' '*.module' '*.install'
-   ```
-
-2. **Stash only source changes** (keep test files unstashed):
-   ```bash
-   git stash push -- src/ config/ *.module *.install
-   ```
-   Adjust paths based on what was actually changed. The goal: revert the FIX
-   while keeping the TESTS in place.
-
-3. **Run the new/modified tests against unfixed code:**
-   ```bash
-   ddev exec ../vendor/bin/phpunit [new_test_files]
-   ```
-
-4. **Verify tests FAIL:**
-   - If all new tests fail: VALIDATED. Tests are legitimate.
-   - If some tests pass without the fix: those tests are trivially true
-     (they don't actually test the behavioral change). Rewrite them.
-   - If all tests pass without the fix: ALL tests are trivially true. Rewrite.
-
-5. **Restore the fix:**
-   ```bash
-   git stash pop
-   ```
-
-6. **Report results in push gate summary:**
-   ```
-   Test Validation: 22/24 correctly fail without fix
-   Trivially passing: 2/24 (testDefaultConfig, testEmptyList - test setup, not fix)
-   ```
-
-7. **If invalid tests found:** rewrite them to actually test the behavioral change.
-   Re-run validation. Max 2 rewrite cycles.
-
-**Edge cases:**
-- Test-only changes (no source fix): skip validation.
-- Config-only changes: stash config files specifically.
-- If `git stash pop` fails: `git checkout -- src/ config/` to restore from last commit.
-
-### Pre-Push Quality Gate (MANDATORY)
+### Pre-Push Quality Gate
 
 Before pushing to the issue fork, ALL of these must pass:
 
-**Step 1: PHPCS (automatic)**
-```bash
-ddev exec phpcs --standard=Drupal,DrupalPractice [changed_files]
-```
-Required: 0 errors, 0 warnings. If issues found, fix automatically and re-run.
+**Step 0: CI parity discovery (run first)**
 
-**Step 2: Tests (automatic)**
+Mirror every CI job that will run on the module's pipeline. PHPCS + PHPUnit
+alone is not enough; modern Drupal modules enforce PHPStan, cspell,
+stylelint, and eslint too, and each skipped job is a potential CI
+round-trip.
+
+```bash
+/mnt/data/drupal/CONTRIB_WORKBENCH/scripts/local_ci_mirror.sh \
+  web/modules/contrib/<module_name>
+```
+
+Required: exit code 0 (zero failed jobs). Do NOT proceed to Steps 1-2
+below until Step 0 passes. See `references/ci-parity.md` for the full
+flag list (`--fast`, `--tests-only`, `--only`, `--skip`, `--json`),
+gotcha handling (PHPCS warnings, cspell dictionaries, eslint configs,
+`allow_failure` jobs), and failure triage (pre-existing vs caused by
+your changes).
+
+Steps 1-2 below are per-tool fallbacks for debugging a single job in
+isolation when the helper is unavailable.
+
+**Step 1: PHPCS (automatic, fallback)**
+```bash
+ddev exec phpcs --standard=Drupal,DrupalPractice --runtime-set ignore_warnings_on_exit 1 [changed_files]
+```
+Required: 0 errors. Warnings are reported but do not block.
+
+**Step 2: Tests (automatic, fallback)**
 ```bash
 ddev exec phpunit [module_test_path]
 ```
 Required: 0 failures, 0 errors. If tests fail, fix and re-run.
 
-**Step 3: Spec Reviewer Agent (MANDATORY for feature MRs and review-only flows)**
+**Step 3: Spec Reviewer Agent** (for feature MRs and review-only flows)
 
 Dispatch the `drupal-spec-reviewer` agent BEFORE the code reviewer. This agent
 verifies that the implementation matches the issue requirements AND that the
@@ -495,7 +375,7 @@ issue's factual claims are accurate.
   that you already reproduced. The spec reviewer adds value when the issue
   describes architectural gaps, missing features, or how code "should" work.
 
-**Step 4: Reviewer Agent (MANDATORY, not optional)**
+**Step 4: Reviewer Agent**
 
 ALWAYS dispatch the `drupal-reviewer` agent after code changes are complete.
 This is not conditional on change size. Every change gets reviewed.
@@ -505,7 +385,7 @@ This is not conditional on change size. Every change gets reviewed.
 - If NEEDS_WORK: fix issues, re-dispatch (max 2 iterations)
 - If CONCERNS: include in push gate summary for user to see
 
-**Step 5: Verifier Agent (MANDATORY, not optional)**
+**Step 5: Verifier Agent**
 
 ALWAYS dispatch the `drupal-verifier` agent after code changes are complete.
 Can run in parallel with the reviewer (use `run_in_background` for one).
@@ -529,6 +409,19 @@ d.o comment summarizing the changes. Pass it: issue context, what was found,
 what was fixed, and test results. The draft is saved to
 `DRUPAL_ISSUES/{issue_id}/issue-comment-{issue_id}.html` and included in the
 push gate summary for user review.
+
+The drafting rules live in `drupal-issue-comment` SKILL.md "Humility over
+showmanship" section — read it before invoking. The three hard rules the
+draft MUST respect on first try (so it doesn't need re-trimming):
+
+1. **No "happy to change" hedges on incomplete work.** Finish in-scope
+   mechanical follow-throughs (tests, standards, naming) BEFORE drafting;
+   don't defer them to the reviewer.
+2. **No "separate follow-up" language without the three-part pre-follow-up
+   search** from `drupal-issue` Q10 having been run and documented.
+3. **No self-congratulatory filler** about tests passing or PHPCS clean.
+
+Canonical failure example (#3560681) is in `drupal-issue-comment` SKILL.md.
 
 ### Push Gate (THE ONLY STOP POINT IN THE ENTIRE WORKFLOW)
 
@@ -556,77 +449,41 @@ Then ask: **"Ready to push these changes to the issue fork? (yes/no)"**
 
 Only push after the user explicitly confirms. If they say no, ask what they want to change.
 
-### Interdiff Generation (When Pushing Follow-Up Commits)
-
-When pushing follow-up commits to an existing MR (not creating a new MR):
+### Interdiff (follow-up commits to an existing MR)
 
 ```bash
-BASE_COMMIT=$(git log --oneline | head -2 | tail -1 | cut -d' ' -f1)
-git diff $BASE_COMMIT..HEAD > DRUPAL_ISSUES/{issue_id}/interdiff-{issue_id}.patch
+BASE=$(git log --oneline | head -2 | tail -1 | cut -d' ' -f1)
+git diff $BASE..HEAD > DRUPAL_ISSUES/{issue_id}/interdiff-{issue_id}.patch
 ```
-
-Include the interdiff summary in the push gate and reference it in the draft comment.
+Reference the interdiff path in the push gate summary and the draft comment.
 
 ### After Successful Push
 
-After the push succeeds, dispatch the `drupal-pipeline-watch` agent in the background
-to monitor the GitLab CI pipeline:
-
-- Pass: project path, MR IID, GitLab token file
-- The agent will poll every 60 seconds and report when the pipeline completes
-- If pipeline fails: the agent provides the failing job and error extract
-
-Tell the user: "Push complete. Pipeline monitoring started. You'll be notified when CI completes."
-
-Then present finishing options:
-
-```
-What would you like to do next?
-1. Monitor pipeline - Watch GitLab CI and report results
-2. Post comment - Open the issue page to post the draft comment
-3. Clean up - Stop DDEV project (keeps files)
-4. Next issue - Start work on a different issue
-5. Done for now - Keep everything as-is
-```
-
-Wait for user's choice. Option 3 requires confirmation before stopping DDEV.
-
-### Agent Prompt Templates
-
-When dispatching review/verification agents, use the prompt templates:
-- `agents/reviewer-prompt.md` for code review before pushing
-- `agents/verifier-prompt.md` for verifying the fix works in a DDEV environment
-
-Fill in the `[BRACKETED]` context variables before dispatching.
+Dispatch `drupal-pipeline-watch` in the background (project path, MR IID,
+GitLab token) to monitor CI. Tell the user push is complete and pipeline
+monitoring is running. Then offer: monitor pipeline / post comment / stop
+DDEV (confirm before stopping) / next issue / done.
 
 ## References
 
-- [references/issue-status-codes.md](references/issue-status-codes.md) - Drupal.org issue status mapping
-- [references/patch-conventions.md](references/patch-conventions.md) - Patch naming and format
-- [references/hack-patterns.md](references/hack-patterns.md) - Patterns to avoid
-- [references/core-testing.md](references/core-testing.md) - Writing tests for Drupal core contributions
+Load on demand, not by default. Each entry is "open when X":
 
-## Example Output
-
-See [examples/sample-report.md](examples/sample-report.md) for a complete example.
+- `references/ci-parity.md` — Step 0 reports failures you need to diagnose, or you need the full `local_ci_mirror.sh` flag list.
+- `references/testing-patterns.md` — writing a new PHPUnit test and need a Drupal-specific pattern (kernel boot, entity setup, schema fixtures).
+- `references/smoke-testing.md` — need curl/drush eval smoke-test patterns for runtime verification outside PHPUnit.
+- `references/common-checks.md` — fix touches an area you don't immediately know how to verify (caches, routes, permissions).
+- `references/core-testing.md` — fix is in Drupal core, not contrib (stricter test conventions).
+- `references/issue-status-codes.md` — need to set issue status correctly ("Needs work" vs "Needs review" vs "RTBC").
+- `references/patch-conventions.md` — maintainer asks for a patch file instead of an MR (legacy workflow).
+- `references/hack-patterns.md` — you suspect your fix is a shortcut reviewers commonly reject.
+- `agents/reviewer-prompt.md`, `agents/verifier-prompt.md` — templates filled with `[BRACKETED]` context vars when dispatching the review/verify agents.
+- `examples/sample-report.md` — need a complete report example to mimic.
+- `modes/{preflight,package,test,reroll}.md` — command reference for each mode.
 
 ## Handoffs
 
-| After this phase | REQUIRED NEXT SKILL | Purpose |
-|-----------------|---------------------|---------|
-| Fix is ready to push | Present summary, ask user to confirm | Git push to issue fork branch |
-| Need to draft a d.o comment | `/drupal-issue-comment` | Write up findings for the issue |
+| When | Skill | Purpose |
+|------|-------|---------|
 | Need environment setup first | `/drupal-issue-review` | Scaffold DDEV, reproduce, verify |
+| Drafting the push comment | `/drupal-issue-comment` | Auto-invoked at Step 6 |
 
-## Progress Tracking
-
-Create a TaskCreate entry for each phase:
-1. Preflight search on drupal.org
-2. Triage and classify candidate issues
-3. Write the fix (TDD cycle)
-4. Write kernel tests
-5. Run PHPCS + full test suite
-6. Pre-push review
-7. Present completion summary to user (changes, tests, comment draft)
-8. Wait for user confirmation before pushing
-9. Push to issue fork (only after user says yes)

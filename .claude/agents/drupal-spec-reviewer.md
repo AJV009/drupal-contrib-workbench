@@ -77,6 +77,30 @@ For each NEW file added:
 - If the issue or maintainer didn't specify where files should go, and the
   chosen directory conflicts with the majority pattern, flag as SPEC_GAP.
 
+### 2d. Input Shape Coverage (for scanners, validators, guards, filters)
+
+For code that inspects, scans, filters, or guards a data structure (guardrails,
+sanitizers, validators, access checks): enumerate every field of the structure
+that carries the kind of data being inspected, and verify the fix covers ALL
+of them, not just the one used in the reproduction.
+
+- If the bug says "processOutput doesn't scan X," the bug class is
+  "processOutput doesn't scan any field of its class." Verify the fix scans
+  X AND every other field of the same class as X.
+- For ChatMessage-like containers: text, tool call arguments, tool results,
+  streamed chunks, and attachments are all LLM-authored content. A fix that
+  covers one but not the others has the same bug class as the original.
+- Cite file:line where each covered field is read. If a field of the same
+  class is NOT covered, flag it as SPEC_GAP even if the issue did not name it.
+- If a field is deliberately excluded, the implementer must justify why
+  (in the commit message or a code comment). Silent omission is a SPEC_GAP.
+
+Example: #3580690 shipped twice missing this check. Round 1 scanned only
+`getText()` and missed tool calls entirely. Round 2 added tool calls via a
+`json_encode` transformation that hid control characters, quotes, and
+backslashes from the regex. Both rounds would have been caught by an input
+shape check of `ChatMessage` at spec review time.
+
 ### 3. Missing Requirements
 
 - Requirements from the issue NOT addressed?

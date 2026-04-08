@@ -19,6 +19,27 @@ metadata:
 
 > **IRON LAW:** NO EM DASHES, EN DASHES, OR DOUBLE HYPHENS. They look AI-generated. Use commas, colons, semicolons, or periods instead.
 
+## Gotchas
+
+- **drupal.org accepts Filtered HTML only.** Supported tags: `<h2>-<h6>`,
+  `<em>`, `<strong>`, `<pre>`, `<code>`, `<del>`, `<img>`, `<blockquote>`,
+  `<q>`, `<a>`, `<ul>/<ol>/<li>`, `<dl>/<dt>/<dd>`. No `<style>`, `<head>`,
+  `<script>`, `<!DOCTYPE>`. Unknown tags are silently stripped.
+- **`[#NNNNNN]` auto-links to the issue.** `#NNNNNN` on its own does not.
+  Use the brackets every time.
+- **Screenshot paths include the upload date.** After uploading to d.o,
+  the file lives at `/files/issues/YYYY-MM-DD/filename.png` where the date
+  is the day you uploaded (today), not the issue creation date.
+- **Never add `Co-Authored-By: Claude ...` to drupal.org commits.** Different
+  norms than GitHub. The transparency note in the comment body is the
+  correct disclosure on d.o.
+- **`tui.json` entry is pre-created.** `drupal-issue.sh` creates the
+  numeric-issue entry with an `issue-page` action. Only APPEND the comment
+  action — never overwrite or remove the pre-existing entries.
+- **Author comment #9 pattern ≠ humility.** "Happy to change X if you want"
+  on incomplete work defers scoping to the reviewer. Finish mechanical
+  follow-throughs (tests, standards, naming) before drafting, not after.
+
 ## Called From
 
 This skill is invoked as the final step by:
@@ -63,9 +84,40 @@ contributors on the issue.
   PHPCS is clean, or that you ran linting. The MR pipeline shows that. Lines
   like "Existing tests still pass, PHPCS clean" read as boasting. If you wrote
   tests, say you added them. Don't narrate that they pass.
-- **Offer to revert or adjust.** End with something humble like "(happy to
-  revert if the previous approach is better!)" rather than asserting your
-  change is the correct one.
+- **Offer to revert completed work. Do NOT defer incomplete work.**
+  There is a sharp line between these two patterns, and only one is
+  legitimate humility:
+  - **OK** (reverting completed work): "happy to revert this if you
+    prefer the previous approach". You did the work, reviewed it,
+    pushed it, and are offering to undo it if the reviewer disagrees.
+    This respects the reviewer's authority over the final shape.
+  - **NOT OK** (deferring incomplete work): "did not add a kernel test,
+    happy to add one if you want", "didn't nest the new fields to match
+    the upstream convention, say the word if you'd rather have
+    consistency", "will open an MR if preferred". This turns the
+    reviewer into your PM and asks them to do the scoping work you
+    should have done before posting.
+
+  Rule of thumb for deciding: if the work is within the scope of the
+  already-touched files, is mechanical (no new design decisions), or
+  is a standard follow-through (tests, standards compliance, naming
+  consistency with existing conventions), DO IT before posting. If the
+  work genuinely needs a policy choice from the maintainer (a magic
+  number, an API shape, a user-visible name), state the choice you
+  made and the reasoning as a FACT ("picked 2 as one nudge, one retry,
+  then release") rather than framing it as an open question. If the
+  reviewer disagrees, they will say so; that is what the review is
+  for.
+
+- **No "separate follow-up" language without a linked issue AND a
+  completed pre-follow-up search.** Saying "I'll file a separate issue
+  for X" without a link is a smell: either it should already be filed
+  (paste the link), or X belongs in this MR. Before mentioning any
+  follow-up in a comment, run the three-part pre-follow-up search from
+  `drupal-issue` Q10 (issue queue, existing MRs, existing code pattern
+  in the same codebase) and state what was searched so the reviewer
+  knows the check was done.
+
 - **State facts, not opinions about your own work.** "Added strtolower to the
   array_map chains" is a fact. "This is much cleaner" is self-promotion.
 
@@ -241,62 +293,18 @@ Ready to copy-paste into the d.o comment box.
 
 ## TUI Browser Integration (MANDATORY)
 
-After writing the comment HTML file, you **MUST** update `tui.json` in the workspace root (`CONTRIB_WORKBENCH/tui.json`) to register a comment action button. This makes the comment accessible via a one-click button in TUI Browser's terminal toolbar.
+After writing the comment HTML file, append a comment action to the issue's
+entry in `CONTRIB_WORKBENCH/tui.json`. The entry is pre-created by
+`drupal-issue.sh`; only append, never overwrite existing actions like
+`issue-page`.
 
-### How to update tui.json
-
-1. Read the existing `tui.json` file (it will already have an entry for this issue, created by `drupal-issue.sh`)
-2. Add a `comment` action to the issue's `actions` array
-3. Write the file back
-
-The comment action **must** use this exact format:
+Action format (append to the `actions` array of the numeric issue key):
 
 ```json
-{
-  "id": "comment",
-  "label": "Comment",
-  "icon": "comment",
-  "type": "file-open",
-  "path": "/absolute/path/to/DRUPAL_ISSUES/{issue_number}/issue-comment-{issue_number}.html"
-}
+{ "id": "comment", "label": "Comment", "icon": "comment", "type": "file-open", "path": "/absolute/path/to/DRUPAL_ISSUES/{issue_number}/issue-comment-{issue_number}.html" }
 ```
 
-**Critical details:**
-- `"type": "file-open"` — this opens the file directly in TUI Browser's code editor when clicked
-- `"icon": "comment"` — renders a speech bubble icon in the toolbar
-- `"path"` must be the **absolute path** to the comment HTML file
-- Do NOT remove existing actions (like `issue-page`), only append to the array
-- The issue key in `tui.json` is the numeric issue ID (e.g., `"3508503"`)
-
-### Example
-
-If tui.json currently looks like:
-```json
-{
-  "3508503": {
-    "title": "D.O ISSUE: 3508503",
-    "fileCwd": "/home/alphons/drupal/CONTRIB_WORKBENCH/DRUPAL_ISSUES/3508503",
-    "sessions": ["drupal-issue-abc1"],
-    "actions": [
-      { "id": "issue-page", "label": "Issue", "icon": "drupal", "type": "url", "url": "https://www.drupal.org/i/3508503" }
-    ]
-  }
-}
-```
-
-After drafting the comment, update it to:
-```json
-{
-  "3508503": {
-    "title": "D.O ISSUE: 3508503",
-    "fileCwd": "/home/alphons/drupal/CONTRIB_WORKBENCH/DRUPAL_ISSUES/3508503",
-    "sessions": ["drupal-issue-abc1"],
-    "actions": [
-      { "id": "issue-page", "label": "Issue", "icon": "drupal", "type": "url", "url": "https://www.drupal.org/i/3508503" },
-      { "id": "comment", "label": "Comment", "icon": "comment", "type": "file-open", "path": "/home/alphons/drupal/CONTRIB_WORKBENCH/DRUPAL_ISSUES/3508503/issue-comment-3508503.html" }
-    ]
-  }
-}
-```
-
-**This step is not optional.** If you skip it, the contributor loses one-click access to the comment from their terminal.
+Rules: `type` must be `file-open`, `path` must be absolute (not relative),
+issue key is the numeric ID (e.g., `"3508503"`). Skipping this step means
+the contributor loses one-click access to the comment from TUI Browser's
+terminal toolbar.

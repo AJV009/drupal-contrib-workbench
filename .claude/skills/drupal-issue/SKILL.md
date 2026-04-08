@@ -31,38 +31,20 @@ Invoke: `/drupal-issue <issue-url-or-number> [--pre-work-gate]`
 
 This is the skill you use when you're not sure which other skill to use.
 
-## Hands-Free Operation (CRITICAL)
+## Hands-Free Operation
 
-This skill runs **hands-free from invocation to push gate.** The ONLY point
-where you stop and wait for user input is BEFORE pushing to a remote.
+Hands-free from invocation to push gate. The canonical rules (no announcing,
+no inter-phase confirmation, lazy tasks, auto-chain, stop only at push gate)
+live in `CLAUDE.md` "Hands-Free Workflow (Critical)". They apply here
+unmodified.
 
-Rules:
-- Do NOT announce what you are about to do. Just do it.
-- Do NOT present the classification and ask "should I proceed?" Just proceed.
-- Do NOT create all tasks upfront. Create them lazily as you start each phase.
-- Do NOT wait for user confirmation between phases. Auto-chain to the next skill.
-- The workflow stops ONCE: at the push gate in `/drupal-contribute-fix`.
-- If there is nothing to push (review-only, comment-only), stop when presenting the draft comment for user review.
+Pre-work gate: if the invocation includes `--pre-work-gate`, pass it through
+when delegating to `/drupal-issue-review` (its Step 4.5 handles the gate).
+Default is no gate, fully hands-free.
 
-### Pre-Work Gate (optional)
-
-If the invocation includes `--pre-work-gate`, the workflow gains an additional stop
-point AFTER analysis/reproduction but BEFORE writing any code fix. This lets the
-user review findings and steer the approach before the agent invests time in a fix.
-
-When `--pre-work-gate` is present:
-- Pass it through when delegating to `/drupal-issue-review`
-- `/drupal-issue-review` will present the pre-work gate and wait for user input
-- The user chooses: proceed with fix, comment only, adjust approach, or abort
-- After the user responds, the workflow resumes hands-free until the push gate
-
-When `--pre-work-gate` is NOT present (default): fully hands-free as before.
-
-### Additional Instructions
-
-If the prompt includes a preamble starting with `ADDITIONAL INSTRUCTIONS`, treat
-it as session-level guidance. Apply these instructions throughout all phases and
-when delegating to companion skills. Do not repeat them back to the user.
+Additional instructions: if the prompt includes an `ADDITIONAL INSTRUCTIONS`
+preamble, apply it throughout all phases and when delegating. Do not repeat
+it back to the user.
 
 ## Controller Pattern (Context Management)
 
@@ -76,21 +58,55 @@ When running the full workflow, act as a controller that orchestrates agents:
 ## Before You Begin
 
 Before classifying or taking action, answer these questions internally:
-1. Have I read EVERY comment chronologically (not just the last one)?
-2. Do I know the CURRENT status (not what it was when filed)?
+
+1. Have I read every comment chronologically, not just the last one?
+2. Do I know the current status (not what it was when filed)?
 3. Are there MRs? Have I read their diffs?
-4. Did any maintainer comment? What did they say?
+4. Did a maintainer comment, and what did they say?
 5. Are there related/parent/blocking issues referenced? Have I read those?
 6. What branch/version is this targeting?
-7. Does the issue claim something does NOT exist (no event, no hook, no
-   extension point, "module X bypasses Y")? If yes, have I verified that
-   claim by grepping the source? This is a hard gate, not optional.
-8. If there are companion/blocking issues, do they share an assumption
-   with this issue? If yes, have I verified that shared assumption holds?
+7. **Absence verification.** Does the issue claim something does NOT exist
+   (no event, no hook, no extension point, "module X bypasses Y")? If yes,
+   grep the source to confirm the absence before taking the claim at face
+   value. Hard gate — false absence claims produce entire MRs built on a
+   wrong premise (#3581952).
+8. **Cross-issue premise sharing.** Do companion/blocking issues share an
+   assumption with this one? If yes, verify the shared assumption once,
+   before reviewing either.
+9. **Bug class vs. reported symptom.** For scanning, validation, or
+   guardrail code: does the reported symptom describe ONE manifestation
+   or ALL of them? "processOutput doesn't scan text" may imply
+   "processOutput doesn't scan any LLM-authored field, including tool
+   calls and streamed chunks." A fix covering only the reported symptom
+   comes back as Needs Work (#3580690).
+10. **Pre-follow-up search.** Am I about to propose a "separate follow-up",
+    file a new related issue, defer work as "out of scope", or suggest a
+    defensive fix at a caller layer? If yes, run all three checks before
+    mentioning the follow-up in writing:
 
-If any answer is "no," go read more before proceeding. Questions 7 and 8
-are part of the hands-free flow, not interruptions to it. Verifying a
-premise takes 60 seconds. Building on a false premise wastes hours.
+    a. **Issue queue.** `./scripts/drupalorg issue:search <project> "<keywords>" --format=llm`
+       plus `https://www.drupal.org/project/issues/search/<project>?text=<keywords>&status%5B0%5D=Open`.
+       If something matches, link it (related), wait for it (if active), or
+       cross-reference both directions (if sibling-but-distinct).
+    b. **Existing MRs.** `./scripts/drupalorg mr:list <nid> --format=llm`
+       plus a grep of recent commits on the target branch for the
+       function/class you plan to touch.
+    c. **Existing code pattern.** Grep the module and its immediate
+       dependencies for the pattern you're about to "invent". Many
+       "follow-up hardening" suggestions are actually bringing an outlier
+       call site in line with an idiom that already exists 3 directories over.
+
+    If all three come back empty, the follow-up is legitimate — state what
+    was searched in the comment so the reviewer sees the check was done.
+    Canonical failure (#3560681): proposed a defensive fix in
+    `OpenAiBasedProviderClientBase::chat()` without running any of (a)/(b)/(c).
+    Sibling issue #3582345 already existed, and
+    `StreamedChatMessageIterator::assembleToolCalls()` already implemented
+    the exact pattern the "follow-up" was proposing to invent.
+
+If any answer is "no," read more before proceeding. Questions 7-10 are part
+of the hands-free flow, not interruptions: each takes 60 seconds to resolve
+and prevents hours of wrong-direction work.
 
 ### Rationalization Prevention
 
@@ -104,6 +120,29 @@ premise takes 60 seconds. Building on a false premise wastes hours.
 | "I already know what kind of issue this is" | Classify AFTER reading, not before. Assumptions miss context. |
 | "The issue says no extension point exists, so we need one" | Verify the absence first. The AI module's ProviderProxy dispatches events for ALL calls. Issue #3581952 was built on a false "no events" claim. |
 | "The MR code looks correct, so the approach must be right" | Correct code on a wrong premise is still wrong. Check the premise before the code. |
+
+## Gotchas
+
+- **Read artifacts, not the browser.** `DRUPAL_ISSUES/{id}/artifacts/` has
+  `issue.json`, `comments.json`, `merge-requests.json`, `mr-{iid}-diff.patch`,
+  `mr-{iid}-discussions.json`. The fetcher agent pre-populates these. No
+  need to re-fetch from the page.
+- **Comments and MR discussions are separate data sources.** `comments.json`
+  is the d.o thread; `mr-{iid}-discussions.json` is the GitLab inline review
+  (with file/line positions). Reading only one misses half the review.
+- **MR freshness check before code review.** A passing GitLab pipeline does
+  NOT guarantee the MR applies to current target branch. Always dry-run
+  `git apply --check` first (see Step 2 MR Freshness Check).
+- **Companion issues share premises.** If issue B says "blocked by A",
+  verify A's premise critically BEFORE reviewing either. Approving B after
+  approving A independently means missing the same flaw twice (#3581952,
+  #3581955).
+- **"[x] AI Assisted Issue" tag signals extra scrutiny.** Descriptions
+  often sound authoritative but contain subtle inaccuracies about
+  signatures, behavior, or claimed absences.
+- **drupal.org `api-d7` rejects full-text search.** `text=` returns HTTP 412.
+  Use the UI search for keyword queries:
+  `https://www.drupal.org/project/issues/search/<project>?text=<keywords>`.
 
 ## Step 0: Fetch issue data
 
@@ -169,48 +208,32 @@ Fall back to `WebFetch` to read the issue page. For issues with embedded screens
 - Are there **blocking issues** or **related issues** that provide context?
 - What **version/branch** is this targeting?
 
-### Verify claims against source code (especially AI-generated issues)
+### Verify claims against source code
 
-If the issue describes **what code does** (service behavior, method signatures,
-configuration effects), don't take it at face value. Read the actual source files
-and verify:
+Issue descriptions, especially on issues tagged `[x] AI Assisted Issue` or
+`[x] AI Generated Code`, can sound authoritative while being subtly wrong.
+If you will write code or documentation based on a claim about how something
+works, read the source file first. 30 seconds of verification prevents a
+"Needs work" round-trip.
 
-- Does the service/method actually work as described?
-- Are the use cases described accurate, or does the description conflate similar
-  but distinct concepts? (e.g., "structured output" vs "extracting from unstructured text")
-- Are function signatures, parameter names, and return types correct?
-- For **structural/placement changes** (nav entries, config organization, menu
-  hierarchy): check how existing files already reference or cross-link the items
-  being placed. Filesystem path alone is not a reliable indicator of where
-  something belongs conceptually. Read the surrounding documentation to understand
-  the project's information architecture before deciding placement.
-- **For claimed gaps ("no event exists", "no extension point", "module X
-  bypasses Y entirely"):** verify the absence. Grep for the event, hook, or
-  service the issue claims is missing. Trace the actual call chain from the
-  entry point (controller, form, command) through to the provider/service call
-  and check every layer for dispatched events, hooks, or interceptors. A claim
-  that something does NOT exist requires more diligence than a claim about
-  what does exist, because it is harder to prove and easier to get wrong.
-- **For MRs that add new extension points (events, hooks, alter hooks):**
-  before reviewing the implementation, check whether the parent module already
-  provides a generic extension point that covers the use case. Example: the
-  AI module's `PreGenerateResponseEvent` fires for ALL provider calls via
-  `ProviderProxy`, including calls from submodules like ai_ckeditor. A
-  module-specific event is only justified if the generic event lacks required
-  context that cannot be obtained another way.
-
-This is especially important for issues tagged "[x] AI Assisted Issue" or
-"[x] AI Generated Code", where descriptions often sound authoritative but
-contain subtle inaccuracies.
-
-**Rule of thumb:** If you will write code or documentation based on an issue's
-description of how something works, read the source file first. 30 seconds of
-verification prevents a "Needs work" round-trip.
-
-**Rule of thumb (gaps):** If the issue claims something does NOT exist (no event,
-no hook, no extension point), spend 60 seconds grepping before accepting the
-claim. The cost of verifying an absence is a grep command. The cost of accepting
-a false absence claim is an entire MR built on a wrong premise (see #3581952).
+- **Claims about behavior** (service methods, signatures, config effects):
+  open the source, confirm the method does what the issue says. Watch for
+  conflations (e.g., "structured output" vs "extracting from unstructured text").
+- **Claims of absence** ("no event exists", "no hook", "module X bypasses Y"):
+  grep for the thing the issue says is missing. Trace the call chain from
+  entry point through to the provider/service call and check every layer.
+  Verifying an absence is harder than verifying a presence, so it needs more
+  diligence. Accepting a false absence claim means an entire MR built on a
+  wrong premise (see #3581952).
+- **Claims for new extension points** (events, hooks, alter hooks): before
+  reviewing the implementation, check whether the parent module already has
+  a generic extension point that covers the case. Example: the AI module's
+  `PreGenerateResponseEvent` fires for ALL provider calls via `ProviderProxy`,
+  including submodule calls.
+- **Structural/placement changes** (nav entries, config sections, menu
+  hierarchy): filesystem path is not a reliable indicator of conceptual
+  category. Read how existing files already cross-link the items being placed
+  before deciding the target location.
 
 ## Step 2: Classify the action needed
 
@@ -283,72 +306,36 @@ modules/custom/mymodule/src/...
 When these patterns are detected, `/drupal-contribute-fix` must be invoked for
 preflight search before any code changes.
 
-### A) Reproduce a bug
-The issue reports a bug and either nobody confirmed it, a reviewer couldn't reproduce, or it was reopened.
+### Action categories
 
-**Action:** Immediately invoke `/drupal-issue-review` to set up an environment and reproduce.
+| # | Condition | Action |
+|---|---|---|
+| A | Bug report, not yet confirmed, reviewer couldn't reproduce, or reopened | Invoke `/drupal-issue-review` to set up env + reproduce |
+| B | MR exists and needs review OR marked "Needs work" with specific feedback | Invoke `/drupal-issue-review` to set up env with MR applied |
+| C | Fix exists on one branch, needs porting (or maintainer asked for changes from a parent issue) | Read source MR, read target branch, adapt, invoke `/drupal-contribute-fix` to package |
+| D | Maintainer asked to retarget to a different version/branch | Handle directly: update the MR target branch; stop at push gate |
+| F | Issue just needs a knowledgeable reply | Invoke `/drupal-issue-comment`, present draft |
+| H | Fix already committed on one branch, needs backport | Cherry-pick, resolve conflicts, test, package; stop at push gate |
+| I | MR looks good, just needs confirmation it works | Invoke `/drupal-issue-review` to verify, then `/drupal-issue-comment` for confirming comment. Do NOT refactor or "improve" working code |
 
-### B) Review/test an existing MR
-An MR exists and needs review, or was marked "Needs work" with specific feedback.
+Categories with escalation logic:
 
-**Action:** Immediately invoke `/drupal-issue-review` to set up an env with the MR applied.
+**E) Respond to reviewer feedback.** Address each point, then stop at push gate.
 
-### C) Adapt/port code between branches
-A fix exists on one branch and needs porting to another, or a maintainer asked for changes from a parent issue.
+- *Test check (bug fixes):* before pushing, verify the MR has test coverage
+  for the bug scenario. If not, write one. A bug fix without a test that
+  proves the bug existed is incomplete, even if the code change is tiny.
+  Contributing a missing test is more valuable than paragraphs of analysis
+  in a comment. When in doubt, escalate to `/drupal-contribute-fix`.
+- *Scope escalation:* if addressing the feedback requires creating NEW files
+  or rewriting existing files from scratch (more than ~30 lines of new code,
+  or placing files in directories not verified against project structure),
+  escalate to `/drupal-contribute-fix`. A rewrite is not "responding to
+  feedback"; it is writing new code that needs the full reviewer/verifier gates.
 
-**Action:**
-1. Read the source issue/MR to understand what was done
-2. Read the target branch to understand divergence
-3. Adapt the code
-4. Immediately invoke `/drupal-contribute-fix` to package the result
-
-### D) Version bump / update target
-A maintainer commented asking to retarget to a different version or branch.
-
-**Action:** Handle directly. Update the MR target branch. Stop before push for user confirmation.
-
-### E) Respond to reviewer feedback
-A reviewer or maintainer left specific feedback.
-
-**Action:** Address each point, then stop before push for user confirmation.
-
-**Test check (mandatory for bug fixes):** Before pushing, check if the MR
-has test coverage for the bug scenario. If not, write one. A bug fix without
-a test that proves the bug existed is incomplete, regardless of how small the
-code change is. This applies even when responding to reviewer feedback on
-someone else's MR. Contributing a missing test is more valuable than
-paragraphs of code analysis in a comment. When in doubt, escalate to
-`/drupal-contribute-fix` which enforces the test gate.
-
-**Scope escalation:** If addressing the feedback requires creating NEW files
-or rewriting existing files from scratch (not just editing a few lines),
-escalate to the full skill chain: invoke `/drupal-contribute-fix` to package
-the result. A rewrite is not "responding to feedback"; it is writing new code
-that needs the reviewer and verifier gates. The threshold: if you are writing
-more than ~30 lines of new code, or placing files in directories you haven't
-verified against the project's canonical structure, escalate.
-
-### F) Just reply with context
-The issue just needs a knowledgeable reply.
-
-**Action:** Immediately invoke `/drupal-issue-comment`, then present the draft for user review.
-
-### G) Write a fix from scratch
-The issue describes a bug with no MR yet, or existing MRs were closed/abandoned.
-
-**Action:** Immediately invoke `/drupal-issue-review` for reproduction, then `/drupal-contribute-fix` for the fix.
-
-### H) Cherry-pick or backport
-A fix was committed on one branch and needs backporting.
-
-**Action:** Cherry-pick, resolve conflicts, test, package. Stop before push for user confirmation.
-
-### I) Re-review an existing MR (no code changes needed)
-The MR already looks good. Just needs confirmation it works.
-
-**Action:** Immediately invoke `/drupal-issue-review`, verify the fix works,
-then invoke `/drupal-issue-comment` to draft a confirming comment.
-Do NOT refactor, add tests, or "improve" working code.
+**G) Write a fix from scratch.** Issue describes a bug with no MR, or existing
+MRs were abandoned. Invoke `/drupal-issue-review` for reproduction, then
+`/drupal-contribute-fix` for the fix.
 
 ## Step 3: Take action
 
@@ -372,29 +359,12 @@ Based on the classification, **immediately** either:
 
 **Test coverage is enforced by `/drupal-contribute-fix`.** See that skill for the full test gate requirements.
 
-## Progress Tracking
-
-Use lazy task creation. Do NOT create all tasks upfront. Create each task
-only when you START that phase. The first thing after invocation should be
-dispatching the fetcher agent, not creating tasks.
-
-1. Create task when starting a phase (status: in_progress)
-2. Mark completed when done
-3. Create next task when starting next phase
-
 ## Reading related issues
 
-When comments reference other issues like `[#3491351]` or link to parent issues,
-**go read them**. Common patterns:
-
-- **"See parent issue #X"** — The parent has context you need. Read it.
-- **"This MR is missing changes from #X"** — Go read #X's MR diff to see
-  what's missing.
-- **"Related to #X"** — Might have useful context or a fix you can reuse.
-- **"Duplicate of #X"** — Check if #X was resolved. If so, this one might
-  need closing.
-- **"Blocked by #X"** — Check #X's status. If it's fixed, this one might
-  be unblocked now.
+When comments reference `[#NNNNNN]` or parent issues, go read them. "See
+parent issue" = read for context; "missing changes from #X" = read #X's diff;
+"related to" = optional but often useful; "duplicate of" = check if #X was
+resolved; "blocked by" = check if #X is fixed and this is now unblocked.
 
 ### Cross-reference validation for companion issues
 
@@ -443,30 +413,5 @@ Do NOT stop to tell the user what you found before acting. Just act. The user wi
 
 ## Examples
 
-```
-/drupal-issue 3561693
-→ Reads issue, sees it's "Needs work" because reviewer couldn't reproduce
-→ Classifies as: Reproduce a bug + respond to reviewer
-→ Delegates to /drupal-issue-review, then drafts comment
-
-/drupal-issue 3577386
-→ Reads issue, sees maintainer flagged missing third-party module changes
-→ Classifies as: Adapt code (port from parent issue)
-→ Reads parent issue #3491351, identifies missing pieces, adapts MR
-
-/drupal-issue https://www.drupal.org/project/ai/issues/3558728
-→ Reads issue, sees it's RTBC with a working MR
-→ Classifies as: Review/test existing MR
-→ Reviews the code, optionally sets up env to verify
-
-/drupal-issue 3577812
-→ Reads issue, sees it was closed as "cannot reproduce"
-→ Classifies as: Just reply with context
-→ Drafts a comment explaining when/how it can be reproduced
-
-/drupal-issue 3580001
-→ Reads issue, sees "Needs review" with a clean MR and no objections
-→ Classifies as: Re-review (no code changes needed)
-→ Sets up env, verifies the fix, drafts a confirming comment
-→ Does NOT add "improvements" or refactor working code
-```
+See `examples/classification-walkthroughs.md` for worked examples of how
+real issue states map to the A-I categories above.

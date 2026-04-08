@@ -22,16 +22,16 @@ Invoke: `/drupal-issue-review <issue-url-or-number>`
 
 > **IRON LAW (VERIFICATION):** NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE. Don't say "reproduced" without showing the error. Don't say "verified" without test output.
 
-## Hands-Free Operation (CRITICAL)
+## Hands-Free Operation
 
-This skill runs hands-free. Do NOT stop between phases to ask the user what to do.
+Hands-free from DDEV setup through reproduction. Canonical rules in
+`CLAUDE.md` "Hands-Free Workflow (Critical)". After reproduction/testing,
+auto-chain:
+- Issues found needing code fixes -> `/drupal-contribute-fix`
+- MR verified and working -> `/drupal-issue-comment` (confirming comment)
+- Bug reproduced, no fix from us -> `/drupal-issue-comment` (findings)
 
-- After DDEV setup completes: immediately proceed to reproduction/testing.
-- After reproduction/testing: immediately proceed to the next appropriate action:
-  - Issues found that need code fixes -> auto-invoke `/drupal-contribute-fix`
-  - MR verified and working -> auto-invoke `/drupal-issue-comment` to draft confirming comment
-  - Bug reproduced, no fix needed yet -> auto-invoke `/drupal-issue-comment` to draft findings
-- The ONLY stop point is the push gate in `/drupal-contribute-fix` or presenting the draft comment.
+Stop point is the push gate in `/drupal-contribute-fix` or the draft comment.
 
 ## Before You Begin
 
@@ -54,37 +54,31 @@ If `DRUPAL_ISSUES/{issue_id}/artifacts/` exists (populated by `drupal-issue-fetc
 
 This replaces the need to re-read the issue from the browser. The answers to the "Before You Begin" questions should come from these artifacts.
 
-## Overview
+## Gotchas
 
-```
-Issue URL/number
-      │
-      ▼
- ┌─────────────┐
- │ 1. READ     │  Read the issue page (browser or web fetch)
- │    ISSUE    │  Extract: versions, modules, steps to reproduce
- └──────┬──────┘
-        ▼
- ┌─────────────┐
- │ 2. SCAFFOLD │  Create DRUPAL_ISSUES/{issue_id}/
- │    DDEV ENV │  ddev config + composer create-project + drush si
- └──────┬──────┘
-        ▼
- ┌─────────────┐
- │ 3. INSTALL  │  composer require + drush en for each module
- │    MODULES  │  at the exact versions from the issue
- └──────┬──────┘
-        ▼
- ┌─────────────┐
- │ 4. REPRODUCE│  Follow the issue's steps to reproduce
- │    THE BUG  │  Take screenshots with agent-browser
- └──────┬──────┘
-        ▼
- ┌─────────────┐
- │ 5. COMMENT  │  Draft a d.o comment (uses /drupal-issue-comment)
- │    (opt)    │
- └─────────────┘
-```
+- **Never stop/delete other DDEV projects.** Only operate within
+  `DRUPAL_ISSUES/{id}/`. Other instances in `DRUPAL_ISSUES/` may be in
+  active use. On port conflict, ask the user — do not auto-increment or
+  stop neighbors.
+- **MR freshness: dry-run `git apply --check` before code review.** A
+  green GitLab pipeline on the MR's own base branch does NOT imply clean
+  apply to the current target branch. Stale MRs waste review effort.
+- **Drush login links are single-use and expire quickly.** Regenerate
+  `ddev drush uli --no-browser` for each agent-browser session; a saved
+  URL from 10 minutes ago will fail silently.
+- **Dependency declaration gaps.** Some modules need `drupal/token`,
+  `drupal/key`, etc. without declaring them. If `drush en` fails with a
+  missing dependency, `composer require` it and retry; don't assume the
+  issue.
+- **Discover project test base classes before writing tests.** The AI
+  module provides `BaseClassFunctionalJavascriptTests` with built-in
+  `takeScreenshot()` and video recording. Use project base classes when
+  they exist instead of building from `KernelTestBase`/`WebDriverTestBase`
+  directly. Scan `tests/` for `*TestBase*`, `Base*Test*`.
+- **Frontend diff changes require visual verification.** CSS/Twig/JS/theme
+  diffs cannot be verified by reading code alone. A single class rename
+  can break icon positioning. Always take desktop + mobile screenshots
+  when the diff touches these files.
 
 ## Step 1: Read the Issue
 
@@ -158,48 +152,12 @@ work while it sets up (~3-4 minutes).
 
 ### Parallel Work While DDEV Sets Up
 
-While the DDEV agent runs in the background, perform static code review of the
-MR diff (if an MR exists). This requires NO running environment:
-
-1. **Read the full MR diff** from `artifacts/mr-{iid}-diff.patch`
-2. **Static review checklist** (for each file in the diff):
-   - `declare(strict_types=1)` present in new PHP files?
-   - No `\Drupal::` static calls in services/controllers?
-   - Constructor injection used correctly?
-   - PHPDoc on all public methods?
-   - `$this->t()` for user-facing strings?
-   - Proper exception handling (not swallowing errors)?
-   - Entity ID constraints respected (64 char max for config entities)?
-   - Input validation at system boundaries?
-3. **Test coverage gap analysis**:
-   - Identify new/changed methods that need tests
-   - Check if the MR includes ANY test files. If a bug fix MR has zero
-     tests, flag it. A missing test is a bigger gap than a missing PHPDoc.
-   - **Discover project test infrastructure**: scan the module's `tests/`
-     directory and the parent project's `tests/` for base classes. Look for
-     `*TestBase.php`, `*TestCase.php`, `Base*Test*.php` files. Note what
-     they provide (screenshot capture, video recording, pre-configured
-     modules, trait helpers). Example: the AI module provides
-     `BaseClassFunctionalJavascriptTests` with built-in `takeScreenshot()`
-     and `videoRecording` support. If these exist, use them when writing
-     tests rather than building from scratch.
-4. **Premise and architectural check** (do this BEFORE deep code review):
-   - Does the issue claim something does NOT exist (no event, no hook, no
-     extension point)? Grep the parent module to verify the absence.
-   - Does the MR add a new event, hook, or service? Check if the parent
-     framework already provides a generic one that covers the use case.
-     Example: a submodule-specific pre-request event is unnecessary if
-     the parent module's ProviderProxy already dispatches one for all calls.
-   - If the premise is false, flag it immediately. Do not invest further
-     review effort on code built on a wrong foundation.
-5. **MR freshness check**: Compare file paths and context lines in the diff
-   against the current target branch. Look for signs the MR is stale:
-   - File paths in the diff that don't exist on the target branch (renamed upstream)
-   - Context lines in the diff that don't match the current file content
-   - Upstream commits touching the same files after the MR was last updated
-     (check `git log` on the target branch for the files in the diff)
-   If freshness is suspect, flag it before investing further review effort.
-6. **Note findings** for use after DDEV is ready
+While the DDEV agent runs in the background (~3-4 min), read the MR diff
+at `artifacts/mr-{iid}-diff.patch` and work through the static review
+checklist at `references/static-review-checklist.md`. It covers coding
+standards, test-coverage gaps, premise/architectural verification, and
+MR freshness. Record findings to hand to the verifier/reviewer agents
+after DDEV is ready. No running environment needed.
 
 When the DDEV agent completes (you will be notified), use its enriched report
 directly: it includes exact paths to phpunit/phpcs, module path, MR application
@@ -208,28 +166,13 @@ If FAILED, review the error and either fix manually or ask the user.
 
 The manual setup steps below are the FALLBACK if the agent is unavailable or fails.
 
-### ddev config
+### Manual fallback (if the agent fails)
 
-Use a short project name derived from the issue ID to avoid conflicts:
-
-```bash
-ddev config \
-  --project-type=drupal \
-  --php-version=8.3 \
-  --docroot=web \
-  --project-name=d{issue_id}
-```
-
-### Start + install Drupal
-
-```bash
-ddev start
-ddev composer create drupal/recommended-project:{core_version} --no-interaction
-ddev composer require drush/drush --no-interaction
-ddev drush site:install --account-name=admin --account-pass=admin -y
-```
-
-Where `{core_version}` is `^11`, `^10`, etc. based on step 1.
+`ddev config --project-type=drupal --project-name=d{issue_id}`, then
+`ddev start`, `ddev composer create drupal/recommended-project:{core_version}`,
+`ddev composer require drush/drush`, and
+`ddev drush site:install --account-name=admin --account-pass=admin -y`.
+Core version (`^11`, `^10`) comes from Step 1. Prefer the agent over this.
 
 ## Step 3: Install Required Modules
 
@@ -276,49 +219,17 @@ Follow the issue's steps to reproduce **exactly**. If steps involve UI configura
 2. Use `agent-browser` to navigate and interact (invoke the `/agent-browser` skill for detailed usage)
 3. Take screenshots at each significant step
 
-### Screenshot capture with agent-browser
+### Screenshot capture
 
-Use `agent-browser` (installed at `~/.cargo/bin/agent-browser`, headless by default, no npm/node needed).
+Use the `agent-browser` skill for all browser interaction (full command
+reference lives there). Typical flow: login via
+`ddev drush uli --no-browser`, open in agent-browser, wait networkidle,
+snapshot for refs, click/fill, screenshot `--full` to
+`$ISSUE_DIR/screenshots/NN-slug.png`, close.
 
-```bash
-# Login to DDEV site
-ULI=$(ddev drush uli --no-browser 2>/dev/null)
-agent-browser open "$ULI"
-agent-browser wait --load networkidle
-
-# Navigate to the relevant page
-agent-browser open "https://d{issue_id}.ddev.site/admin/config/some/page"
-agent-browser wait --load networkidle
-
-# Take screenshot
-agent-browser screenshot --full "$ISSUE_DIR/screenshots/01-page-name.png"
-
-# For interactive elements, use snapshot to get refs
-agent-browser snapshot -i
-# Then interact: agent-browser click @e1, agent-browser fill @e2 "value", etc.
-
-# After interacting, re-snapshot and screenshot the result
-agent-browser snapshot -i
-agent-browser screenshot --full "$ISSUE_DIR/screenshots/02-after-action.png"
-
-# Check for error messages on page
-agent-browser get text ".messages--error"
-
-# Always close when done
-agent-browser close
-```
-
-Save screenshots to `$ISSUE_DIR/screenshots/` with numbered prefixes:
-
-```
-screenshots/
-  01-form-display.png
-  02-config-setup.png
-  03-error-triggered.png
-  04-watchdog-log.png
-```
-
-For the full command reference and patterns (form filling, auth persistence, diffing, etc.), see the `agent-browser` skill at `.claude/skills/agent-browser/SKILL.md`.
+Save screenshots to `$ISSUE_DIR/screenshots/` with numbered prefixes
+(`01-form-display.png`, `02-config-setup.png`, `03-error-triggered.png`,
+`04-watchdog-log.png`, etc.).
 
 ### Visual verification when reviewing an existing MR with frontend changes
 
@@ -426,38 +337,14 @@ This takes 30 seconds and prevents duplicate MRs.
 
 Output (if comment drafted) goes to: `$ISSUE_DIR/issue-comment-{issue_id}.html`
 
-## Companion skills
+## Companion Skills (Auto-Invoked)
 
-This skill handles **environment + reproduction**. Next steps are auto-invoked:
+This skill handles environment + reproduction. The next step is invoked
+automatically based on the reproduction outcome; do not ask the user which.
 
-| What | Skill | When |
-|------|-------|------|
-| Writing the actual fix | `/drupal-contribute-fix` | Auto: when issues found |
-| Code review before submitting | `drupal-reviewer` agent | Auto: via contribute-fix |
-| Verifying the fix works | `drupal-verifier` agent | Auto: via contribute-fix |
-| Drafting the d.o comment | `/drupal-issue-comment` | Auto: when review complete |
-| Coding standards check | `/drupal-coding-standards` | Auto: via contribute-fix |
-
-## Quick reference
-
-```
-/drupal-issue-review 3561693
-/drupal-issue-review https://www.drupal.org/project/ai/issues/3561693
-```
-
-Both forms work. The skill extracts the issue ID either way.
-
-## Handoffs (Auto-Invoked)
-
-These are invoked AUTOMATICALLY. Do not ask the user which to use.
-
-| After this phase | AUTO-INVOKE | Purpose |
+| After this phase | Auto-invoke | Purpose |
 |-----------------|-------------|---------|
-| Issues found, need a fix | `/drupal-contribute-fix` | Write the fix + tests, stops at push gate |
+| Issues found, need a fix | `/drupal-contribute-fix` | Write the fix + tests (chains reviewer/verifier agents, stops at push gate) |
 | MR verified, no issues | `/drupal-issue-comment` | Draft confirming comment, present to user |
 | Bug reproduced, no fix from us | `/drupal-issue-comment` | Draft findings comment, present to user |
 
-## Progress Tracking
-
-Use lazy task creation. Do NOT create all 6 tasks upfront.
-Create each task only when you START that phase.
