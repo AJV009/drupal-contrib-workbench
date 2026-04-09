@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "CONTRIB_WORKBENCH",
+  "project_id": "275322ef-ad43-48a6-8857-ba5a42cf9d7f"
+}
