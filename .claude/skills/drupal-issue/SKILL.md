@@ -118,6 +118,7 @@ and prevents hours of wrong-direction work.
 | "Let me start coding, I'll check for existing fixes later" | Coding first, searching second = duplicate MRs. Always preflight. |
 | "The user just wants this done fast" | Fast and wrong wastes more time than thorough and right. |
 | "I already know what kind of issue this is" | Classify AFTER reading, not before. Assumptions miss context. |
+| "Resonance check is slow, let me just classify" | Resonance runs in under 2 minutes and catches scope-expansion cases the classifier would miss entirely. The user had to manually notice these in session evidence — that is the problem this step solves. |
 | "The issue says no extension point exists, so we need one" | Verify the absence first. The AI module's ProviderProxy dispatches events for ALL calls. Issue #3581952 was built on a false "no events" claim. |
 | "The MR code looks correct, so the approach must be right" | Correct code on a wrong premise is still wrong. Check the premise before the code. |
 
@@ -166,6 +167,64 @@ The artifacts are at `DRUPAL_ISSUES/{issue_id}/artifacts/`:
 - `mr-{iid}-diff.patch` for MR diffs
 - `mr-{iid}-discussions.json` for GitLab review discussions (general comments + inline diff comments with file/line positions)
 
+## Step 0.5: Resonance Check (MANDATORY)
+
+After the fetcher returns COMPLETE or PARTIAL, **immediately** dispatch the
+`drupal-resonance-checker` agent. Do not skip this — it catches scope
+expansion and duplicate scenarios that would otherwise require the user to
+notice manually mid-work.
+
+```
+Dispatch: drupal-resonance-checker
+Inputs:
+  issue_id = {issue_id}
+  artifacts_dir = DRUPAL_ISSUES/{issue_id}/artifacts
+```
+
+The agent runs `.claude/skills/drupal-issue/scripts/resonance_search.py` and
+returns a `RESONANCE_REPORT` with candidates bucketed into:
+
+- **DUPLICATE_OF** (confidence >= 80) — strong signal that this issue is a
+  duplicate of an existing one. Agent includes a draft close-as-duplicate
+  comment template. Classification gains category **J** as the top candidate.
+- **SCOPE_EXPANSION_CANDIDATE** (confidence 60-79) — this issue overlaps with
+  an active/in-progress issue in the same module. Category **J** is a valid
+  option but classification MUST still run normally.
+- **RELATED_TO** (confidence 40-59) — informational only, no flow change.
+- **NONE** — proceed with classification as usual.
+
+**Read the RESONANCE_REPORT before Step 1** and incorporate it into your
+classification decision. Specifically:
+
+- If the report suggests category J, read the candidate issue via
+  `./scripts/fetch-issue --mode full --issue {candidate_nid} --out DRUPAL_ISSUES/{candidate_nid}/artifacts`
+  to verify the overlap is real (confidence is heuristic, not ground truth).
+- If the candidate is an active MR the user has push access to, consider
+  whether to fold the current issue into the existing MR rather than opening
+  a new one.
+- If the report returns NONE, proceed directly to Step 1.
+
+The report is written to `DRUPAL_ISSUES/{issue_id}/workflow/00-resonance.md`
+(human-readable) and `00-resonance.json` (machine-readable) for any
+downstream skill that needs to reread it.
+
+**bd write (best-effort):** Mirror the resonance report to bd:
+
+```bash
+if [[ -n "$BD_ID" ]] && [[ -f "$WORKFLOW_DIR/00-resonance.json" ]]; then
+  scripts/bd-helpers.sh phase-resonance "$BD_ID" "$WORKFLOW_DIR/00-resonance.json"
+fi
+```
+
+**Empty bd is normal.** The workbench bd database started empty per ticket
+028 (no backfill). Layer A (bd-local) will return zero candidates for the
+first N issues worked after this ships. Layer B (d.o) carries the load
+until bd fills up organically.
+
+**Layer B degradation is survivable.** If the scorer reports
+`layer_b.status: "degraded"` (network failure or d.o API issue), continue
+classification normally; do not block on resonance.
+
 ## Step 1: Read the issue
 
 Accept either format:
@@ -185,7 +244,7 @@ The API artifacts contain all textual data: metadata, comments with HTML bodies,
 
 ### When artifacts are NOT available (Step 0 failed)
 
-Fall back to `WebFetch` to read the issue page. For issues with embedded screenshots that need visual inspection, use `agent-browser` (see the `agent-browser` skill for usage).
+Fall back to `./scripts/fetch-issue --mode refresh --issue <url-or-id> --project <project> --out DRUPAL_ISSUES/{issue_id}/artifacts --gitlab-token-file git.drupalcode.org.key` to force a fresh fetch that bypasses caches. For issues with embedded screenshots that need visual inspection, use `agent-browser` (see the `agent-browser` skill for usage).
 
 ### What to read (in order)
 
@@ -249,7 +308,7 @@ reviewing stale diffs:
 1. Clone the target branch (shallow):
    `git clone --depth=1 -b {target_branch} https://git.drupalcode.org/project/{project}.git /tmp/mr-check-{issue_id}`
 2. Fetch the MR diff and dry-run apply:
-   `curl -sL "https://git.drupalcode.org/project/{project}/-/merge_requests/{mr_id}.diff" -o /tmp/mr-{mr_id}.diff`
+   `./scripts/fetch-issue --mode mr-diff --issue {issue_id} --mr-iid {mr_id} --out /tmp/mr-{mr_id}.diff --gitlab-token-file git.drupalcode.org.key`
    `cd /tmp/mr-check-{issue_id} && git apply --check /tmp/mr-{mr_id}.diff`
 3. If `--check` **FAILS**: the MR is stale. Do NOT review the code. Instead:
    - Classify as "MR needs rebase"
@@ -317,6 +376,14 @@ preflight search before any code changes.
 | F | Issue just needs a knowledgeable reply | Invoke `/drupal-issue-comment`, present draft |
 | H | Fix already committed on one branch, needs backport | Cherry-pick, resolve conflicts, test, package; stop at push gate |
 | I | MR looks good, just needs confirmation it works | Invoke `/drupal-issue-review` to verify, then `/drupal-issue-comment` for confirming comment. Do NOT refactor or "improve" working code |
+| J | Resonance check flagged this as DUPLICATE_OF (>=80% confidence) or SCOPE_EXPANSION_CANDIDATE (>=60%) with an active target | Verify the overlap by fetching the candidate issue. If confirmed: draft a close-as-duplicate or fold-into-existing comment via `/drupal-issue-comment`, stop at push gate. If the overlap is thematic not actionable, fall through to categories A-I. |
+
+> **Note on post-fix recovery:** If the solution-depth gate at
+> `/drupal-contribute-fix` Step 2.5 returns `failed-revert`, the fix skill
+> handles the revert-and-rerun internally. The A-J classification above is
+> unaffected — there is no category K for "post-fix retry". The controller
+> does not need to do anything special; it just sees `/drupal-contribute-fix`
+> take longer because it ran twice.
 
 Categories with escalation logic:
 
@@ -336,6 +403,89 @@ Categories with escalation logic:
 **G) Write a fix from scratch.** Issue describes a bug with no MR, or existing
 MRs were abandoned. Invoke `/drupal-issue-review` for reproduction, then
 `/drupal-contribute-fix` for the fix.
+
+## Step 2.5: Persist classification (MANDATORY)
+
+After deciding the category and gathering the metadata in Step 2, write
+the classification artifact and mirror it to bd. The disk write is
+required; the bd mirror is best-effort (failure does not fail the skill).
+
+This step is the contract enforced by `/drupal-issue-review`'s
+"Classification Sentinel Check" preflight. If you skip Step 2.5,
+downstream skills will detect the missing classification and reinstate
+this skill (see `docs/workflow-state-files.md`).
+
+### Write the classification artifact
+
+```bash
+ISSUE_ID={issue_id}
+SENTINEL="$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/$ISSUE_ID/workflow/00-classification.json"
+mkdir -p "$(dirname "$SENTINEL")"
+
+# Preserve launched_at and session_id from the sentinel if present
+LAUNCHED_AT=""
+SESSION_ID=""
+if [ -f "$SENTINEL" ]; then
+  LAUNCHED_AT=$(jq -r '.launched_at // ""' "$SENTINEL")
+  SESSION_ID=$(jq -r '.session_id // ""' "$SENTINEL")
+fi
+
+cat > "$SENTINEL" <<JSON
+{
+  "issue_id": $ISSUE_ID,
+  "status": "classified",
+  "launched_at": "$LAUNCHED_AT",
+  "session_id": "$SESSION_ID",
+  "classified_at": "$(date -Iseconds)",
+  "category": "{A-J}",
+  "category_description": "{one-line description from the action table}",
+  "module": "{machine name}",
+  "module_version": "{version}",
+  "component": "{component name or null}",
+  "existing_mr": {"iid": {iid_or_null}, "source_branch": "{branch_or_null}", "apply_clean": null},
+  "rationale": "{1-2 sentences explaining the classification decision}"
+}
+JSON
+```
+
+The substitutions in `{...}` come from your Step 1 reading of the issue:
+- `{A-J}` → the letter from the classification action table
+- `{module}`, `{version}`, `{component}` → from `artifacts/issue.json`
+- `{iid_or_null}` → the existing MR's iid as a number, OR the literal `null` (no quotes) if no MR exists
+- `{branch_or_null}` → the source branch as a quoted string, OR `null`
+- `{rationale}` → your own 1-2 sentence reasoning
+
+### Mirror to bd (best-effort)
+
+```bash
+BD_ID=$(scripts/bd-helpers.sh ensure-issue "$ISSUE_ID" "Drupal issue $ISSUE_ID: {issue title}" "{module}")
+if [[ -n "$BD_ID" ]]; then
+  scripts/bd-helpers.sh phase-classification "$BD_ID" "$WORKFLOW_DIR/00-classification.json"
+fi
+```
+
+Best-effort: all bd writes go through `scripts/bd-helpers.sh` which
+handles failures internally (logs to stderr, never blocks). The workflow
+file is the source of truth; bd is the queryability layer for cross-issue
+memory (ticket 034).
+
+### Why this step exists
+
+Ticket 023 established the "every phase writes an artifact" contract.
+Audit on 2026-04-09 found 5 recent issues missing
+`00-classification.json` despite being post-ticket-023, indicating the
+prose contract was leaking under load. Ticket 031 added the launcher
+sentinel + reinstate flow to enforce mechanically what prose was failing
+to enforce.
+
+### Rationalization Prevention (Step 2.5)
+
+| Thought | Reality |
+|---|---|
+| "Step 3 will pick this up anyway, I can skip the disk write" | Step 3 chains to a downstream skill that reads the sentinel. If you skip, the downstream skill reinstates this skill. You will run twice. |
+| "The bd write is failing, I should fix it before continuing" | bd is best-effort. Log the failure and continue. The workflow file is the source of truth. |
+| "I already wrote the classification in my reasoning, the JSON is redundant" | The JSON is the durable artifact. Your reasoning is in your context window only. |
+
 
 ## Step 3: Take action
 
@@ -392,7 +542,10 @@ https://git.drupalcode.org/project/{project}/-/merge_requests/{id}/diffs
 ### Applying an MR locally for testing
 ```bash
 cd web/modules/contrib/{module}
-curl -L "https://git.drupalcode.org/project/{project}/-/merge_requests/{id}.diff" | git apply
+# Stream the MR diff from our consolidated fetcher and pipe to git apply.
+# --out - writes to stdout, --issue provides the project context (URL form
+# derives it automatically; bare nid needs --project).
+./scripts/fetch-issue --mode mr-diff --issue {issue_id} --mr-iid {id} --out - --gitlab-token-file git.drupalcode.org.key | git apply
 ```
 
 ### Checking MR pipeline status

@@ -22,6 +22,71 @@ Invoke: `/drupal-issue-review <issue-url-or-number>`
 
 > **IRON LAW (VERIFICATION):** NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE. Don't say "reproduced" without showing the error. Don't say "verified" without test output.
 
+## Classification Sentinel Check (MANDATORY first action)
+
+Before doing any review work, read the classification sentinel:
+
+```bash
+CLASSIFICATION_FILE="$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow/00-classification.json"
+if [ -f "$CLASSIFICATION_FILE" ]; then
+  cat "$CLASSIFICATION_FILE"
+fi
+```
+
+Expected shape: see `docs/workflow-state-files.md` for the full schema.
+
+**Branching:**
+- **File does NOT exist**: this session was started without the launcher
+  (e.g., `/drupal-issue-review` invoked directly without the full chain).
+  Treat this as a fresh run and fall through to normal review. No
+  reinstate.
+- **`status == "classified"`** (or any other non-PENDING terminal state):
+  proceed with review normally.
+- **`status == "PENDING"`**: the launcher wrote the sentinel but
+  `/drupal-issue` did not overwrite it with real classification data.
+  REINSTATE:
+  1. Invoke the Skill tool: `/drupal-issue` with the issue id
+  2. Wait for it to return
+  3. Re-read the sentinel
+  4. If the status is STILL `"PENDING"` after the reinstate returned,
+     this is a FATAL condition. Present the escalation message below
+     and STOP. Do NOT attempt a second reinstate.
+  5. Otherwise, continue with review.
+
+Single retry only. No counter in the sentinel. Rationale: if
+`/drupal-issue` cannot classify on retry, the problem is structural
+(skill broken, fetcher failed, user interrupted) and looping won't fix
+it. The session JSONL will show two `/drupal-issue` invocations in
+sequence, making post-mortem easy.
+
+### Reinstate escalation message (only if single retry fails)
+
+```
+REINSTATE FAILED — issue #{issue_id}
+
+/drupal-issue-review called /drupal-issue to reinstate classification,
+but DRUPAL_ISSUES/{issue_id}/workflow/00-classification.json still shows
+status: PENDING after the reinstate returned.
+
+This indicates /drupal-issue itself is not completing Step 2.5.
+Please investigate manually:
+  1. Check DRUPAL_ISSUES/{issue_id}/artifacts/ — did fetching complete?
+  2. Run /drupal-issue {issue_id} directly and watch for errors at Step 2
+  3. If /drupal-issue runs cleanly when invoked manually, the auto-chain
+     may have a model-level flake; re-run the launcher
+
+Stopping review until you resolve this.
+```
+
+### Rationalization Prevention (sentinel check)
+
+| Thought | Reality |
+|---|---|
+| "The sentinel is probably fine, I'll just trust it" | Read it. PENDING is the common failure mode this check exists to catch. |
+| "I already read the classification in artifacts, I don't need the sentinel" | `artifacts/issue.json` is the raw Drupal API data; the sentinel is the model's committed classification decision. They are different things. |
+| "/drupal-issue already ran before me in the chain, it must have classified" | That's exactly the assumption that failed 5 times in the audit that motivated ticket 031. |
+
+
 ## Hands-Free Operation
 
 Hands-free from DDEV setup through reproduction. Canonical rules in
@@ -86,8 +151,12 @@ Accept either format:
 - `https://www.drupal.org/project/{project}/issues/{id}`
 - Just the number: `3561693`
 
-Normalize to the full URL. Read the issue page using the browser (Claude Chrome)
-or WebFetch. **Read carefully** — don't skim. Pay attention to:
+Normalize to the full URL. Read the issue via the fetched artifacts in
+`DRUPAL_ISSUES/{issue_id}/artifacts/` (populated by the `drupal-issue-fetcher`
+agent — dispatch it with `mode=full` for a fresh fetch or `mode=comments` /
+`mode=delta --since <ts>` for mid-work polls). If you need visual inspection
+for embedded screenshots, use `agent-browser`. **Read carefully** — don't skim.
+Pay attention to:
 
 ### What to extract
 
@@ -133,7 +202,7 @@ instances in DRUPAL_ISSUES/ may be in active use. Only operate within the new
 issue's directory. If there's a port conflict, ask the user.
 
 ```bash
-ISSUE_DIR="/home/alphons/project/freelygive/drupal/CONTRIB_WORKBENCH/DRUPAL_ISSUES/{issue_id}"
+ISSUE_DIR="/home/alphons/drupal/CONTRIB_WORKBENCH/DRUPAL_ISSUES/{issue_id}"
 mkdir -p "$ISSUE_DIR"
 cd "$ISSUE_DIR"
 ```
@@ -192,7 +261,7 @@ To test WITH the fix applied:
 ```bash
 cd web/modules/contrib/{module}
 # Always dry-run first to catch stale MRs before investing review effort
-curl -sL "https://git.drupalcode.org/project/{project}/-/merge_requests/{mr_id}.diff" -o /tmp/mr-{mr_id}.diff
+./scripts/fetch-issue --mode mr-diff --issue {issue_id} --mr-iid {mr_id} --out /tmp/mr-{mr_id}.diff --gitlab-token-file git.drupalcode.org.key
 git apply --check /tmp/mr-{mr_id}.diff
 ```
 
@@ -303,6 +372,79 @@ Wait for the user's response, then:
 - **ABORT**: Stop. Do not invoke any further skills.
 
 If `--pre-work-gate` was NOT passed, skip this step entirely and auto-continue.
+
+## Step 4.9: Emit depth signals for solution-depth gate (MANDATORY)
+
+Before auto-continuing to the next phase, write two files that the solution-depth
+gate (`/drupal-contribute-fix` Step 0.5) will read. These files externalize what
+you learned during review so the fresh pre-fix subagent has all context.
+
+### 4.9a — workflow/01-review-summary.json
+
+Structured summary of the review outcome. Write with heredoc:
+
+```bash
+mkdir -p "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow"
+cat > "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow/01-review-summary.json" <<'JSON'
+{
+  "issue_id": {issue_id},
+  "category": "{A-J letter from classification}",
+  "module": "{module machine name}",
+  "module_version": "{version from artifacts}",
+  "reproduction_confirmed": true,
+  "existing_mr": {"iid": {mr_iid_or_null}, "source_branch": "...", "apply_clean": true},
+  "static_review_findings": [
+    {"file": "src/Path.php", "concern": "brief description"}
+  ]
+}
+JSON
+```
+
+Fill in the actual values from what you gathered during review. If a field is
+not applicable, use `null` (not empty string).
+
+### 4.9b — workflow/01a-depth-signals.json
+
+Raw context for the pre-fix gate to reason about. IMPORTANT: this file contains
+RAW text (reviewer narrative, maintainer comments) that the gate reads and
+interprets. Do NOT attempt to parse or filter the text — pass it through.
+
+```bash
+cat > "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow/01a-depth-signals.json" <<JSON
+{
+  "category": "{A-J}",
+  "resonance_bucket": "{NONE|RELATED_TO|SCOPE_EXPANSION_CANDIDATE|DUPLICATE_OF}",
+  "resonance_report_path": "DRUPAL_ISSUES/{issue_id}/workflow/00-resonance.md",
+  "reviewer_narrative": $(jq -Rs . <<< "$(cat "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow/static-review-notes.md" 2>/dev/null || echo 'No static review notes captured')"),
+  "recent_maintainer_comments": $(jq '[.[-5:] | .[] | {author, date: .created, body}]' "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/artifacts/comments.json" 2>/dev/null || echo '[]'),
+  "proposed_approach_sketch": $(jq -Rs . <<< "{brief sketch of the review's proposed fix plan, or 'none' if comment-only outcome}")
+}
+JSON
+```
+
+**Where do the inputs come from?**
+- `category`: from your classification in Step 4 (A-J)
+- `resonance_bucket`: from `DRUPAL_ISSUES/{issue_id}/workflow/00-resonance.json` if it exists; otherwise `"NONE"`
+- `reviewer_narrative`: from your parallel static review in "### Parallel Work While DDEV Sets Up" — save it to `workflow/static-review-notes.md` during that step and re-read it here
+- `recent_maintainer_comments`: the last 5 entries from `artifacts/comments.json` (jq handles this)
+- `proposed_approach_sketch`: your own 1-3 sentence sketch of what the fix should look like (for the gate to compare against)
+
+Do NOT include `criticism_keywords_hit` or `rationalization_matches` — those
+are reasoning tasks for the gate's opus model, not mechanical regex matches
+from here.
+
+**bd write (best-effort):** Mirror the review summary to bd:
+
+```bash
+BD_ID=$(scripts/bd-helpers.sh ensure-issue "$ISSUE_ID" "Drupal issue $ISSUE_ID" 2>/dev/null)
+if [[ -n "$BD_ID" ]] && [[ -f "$WORKFLOW_DIR/01-review-summary.json" ]]; then
+  scripts/bd-helpers.sh phase-review "$BD_ID" "$WORKFLOW_DIR/01-review-summary.json"
+fi
+```
+
+**This step is MANDATORY for issues that will chain to `/drupal-contribute-fix`.**
+Skip for outcomes that do not chain to a fix (MR verified, cannot reproduce,
+comment-only) — those don't need the depth gate.
 
 ## Step 5: Auto-Continue to Next Phase
 

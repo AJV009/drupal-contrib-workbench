@@ -21,6 +21,28 @@
         ],
         "matcher": ""
       }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/push-gate.sh\"",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/workflow-completion.sh\"",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
     ]
   }
 }

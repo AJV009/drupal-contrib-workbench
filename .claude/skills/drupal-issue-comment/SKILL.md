@@ -280,6 +280,98 @@ messages or MR descriptions on drupal.org. The transparency note in the comment
 is sufficient disclosure. The co-author tag is fine on GitHub and other forges,
 but d.o is a different community with different norms.
 
+## Comment Quality Gate (MANDATORY — runs before output)
+
+Every draft MUST pass all 4 filters below before being written to the
+output file. These are mechanical checks, not suggestions.
+
+### Filter 1: Word count limit
+
+Count the words in the draft (excluding HTML tags). Compare against the
+limit for this comment type:
+
+| Comment type | Max words | When to use |
+|---|---|---|
+| Follow-up to maintainer | 200 | Default |
+| Scope expansion explanation | 350 | Category E (feedback-loop) or explicit scope change |
+| "Confirming this works" | 80 | MR verified, working correctly |
+| Initial issue reply | 250 | First response on the issue from us |
+
+If the draft exceeds the limit: compress. Remove paragraphs that restate
+known information, collapse implementation details into bullet points,
+cut any paragraph that doesn't answer "what changed?" or "what decision
+is needed?". Re-count. If STILL over: rewrite from scratch targeting
+50% of the limit, then expand only what's missing.
+
+**Do NOT present an over-limit draft to the user.** The limit is a hard
+gate, not a guideline.
+
+### Filter 2: Audience filter
+
+Before drafting (not after), internalize this context:
+
+> The maintainers reading this comment already know how this module
+> works internally. They have read the issue and the MR diff. They do
+> NOT need: explanations of what the module does, restatements of the
+> issue, summaries of the MR diff they already have, or congratulatory
+> framing about how thorough the work was. They DO need: what changed
+> since their last review, the specific decision point that needs their
+> input, and any new evidence they don't already have.
+
+This filter is a mindset, not a regex. Apply it during drafting AND
+during compression.
+
+### Filter 3: Filler-pattern check
+
+Load `references/filler-patterns.txt` (one pattern per line, 33 patterns).
+Grep the draft (case-insensitive) against every pattern. Each match is a
+violation that MUST be fixed:
+
+- If the sentence works without the filler phrase, delete the phrase.
+- If the sentence needs restructuring, rewrite it.
+- If the entire sentence is filler, delete it.
+
+Re-run the check after fixes. Zero violations required before proceeding.
+
+**Extending:** When new filler patterns emerge from session evidence,
+append them to `references/filler-patterns.txt`. One pattern per line,
+lowercase, no regex — plain substring match.
+
+### Filter 4: Two-version presentation
+
+After filters 1-3 pass, present the draft to the user in TWO versions:
+
+```
+=== FULL VERSION ({N} words) ===
+
+{the filtered draft, as HTML}
+
+=== COMPRESSED VERSION ({M} words) ===
+
+{first ~100 words as prose + remaining points as a bullet list, as HTML}
+
+Pick: [k]eep full | [c]ompressed | [e]dit
+```
+
+Wait for the user's choice:
+- **k** (keep): write the full version to the output file
+- **c** (compressed): write the compressed version to the output file
+- **e** (edit): ask the user what to change, apply edits, re-run filters
+
+The compressed version is a best-effort summary, not a separate draft.
+Generate it by: keeping the opening greeting + first substantive paragraph,
+converting remaining paragraphs to one bullet each, dropping any paragraph
+that is pure context-setting.
+
+### Rationalization Prevention
+
+| Thought | Reality |
+|---------|---------|
+| "This comment needs the extra context to be understood" | The maintainers already read the issue thread. Cut it. |
+| "200 words isn't enough for this complex topic" | If 200 words isn't enough, you're explaining implementation, not communicating decisions. |
+| "The filler pattern matched but my usage is legitimate" | It's never legitimate. Rewrite the sentence. |
+| "The compressed version loses important nuance" | That's what the [e]dit option is for. Don't inflate the full version to compensate. |
+
 ## Output
 
 The final output is a single `.html` file saved at:

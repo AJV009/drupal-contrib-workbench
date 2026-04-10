@@ -1,0 +1,6 @@
+#!/bin/bash
+# Convenience wrapper for fetch_issue.py.
+# Mirrors the scripts/drupalorg pattern: invoke from workbench root.
+# Populated by ticket 029 Phase B1 with multi-mode subcommands.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+exec python3 "$SCRIPT_DIR/lib/data/fetch_issue.py" "$@"

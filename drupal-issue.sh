@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 MAP_FILE="$SCRIPT_DIR/DRUPAL_ISSUES/session-map.json"
-SESSION_DIR="$HOME/.claude/projects/-home-alphons-project-freelygive-drupal-CONTRIB-WORKBENCH"
+SESSION_DIR="$HOME/.claude/projects/$(echo "$SCRIPT_DIR" | sed 's|[/_.]|-|g')"
+
+# --- bd (beads) env ---
+# Make sure ~/go/bin is on PATH so bd is visible to this shell, the claude
+# subprocess launched below, and any hook that bd setup claude wrote into
+# .claude/settings.json. Belt-and-suspenders with zshrc so non-interactive
+# invocations (cron, tui-browser, etc.) also see bd.
+export PATH="$HOME/go/bin:$PATH"
+# Use bd shared-server mode: bd auto-manages a single dolt sql-server per host
+# with idle-timeout. No pidfile, no launcher lifecycle code needed.
+export BEADS_DOLT_SHARED_SERVER=1
 
 # --- Dependency check ---
 for cmd in jq uuidgen claude; do
@@ -149,6 +159,38 @@ launch_new_session() {
   [[ "$GATE" == true ]] && echo "  Pre-work gate: ENABLED"
   [[ -n "$INSTRUCTIONS" ]] && echo "  Instructions: $INSTRUCTIONS"
   write_tui_json "$ISSUE_ID"
+
+  # --- Sentinel: pre-create workflow/00-classification.json with status=PENDING ---
+  # Idempotency: only write if file is missing OR existing status is PENDING.
+  # Never overwrite a real classification (a re-launched session that already
+  # has classification data should leave the file alone).
+  local issue_workflow_dir="$SCRIPT_DIR/DRUPAL_ISSUES/$ISSUE_ID/workflow"
+  local issue_sentinel="$issue_workflow_dir/00-classification.json"
+  mkdir -p "$issue_workflow_dir"
+
+  local write_sentinel=false
+  if [[ ! -f "$issue_sentinel" ]]; then
+    write_sentinel=true
+  else
+    local existing_status
+    existing_status=$(jq -r '.status // empty' "$issue_sentinel" 2>/dev/null || echo "")
+    if [[ "$existing_status" == "PENDING" ]] || [[ -z "$existing_status" ]]; then
+      write_sentinel=true
+    fi
+  fi
+
+  if [[ "$write_sentinel" == "true" ]]; then
+    cat > "$issue_sentinel" <<EOF
+{
+  "issue_id": $ISSUE_ID,
+  "status": "PENDING",
+  "launched_at": "$(date -Iseconds)",
+  "session_id": "$uuid",
+  "note": "Sentinel created by drupal-issue.sh. The /drupal-issue skill MUST overwrite it with real classification data before invoking any companion skill."
+}
+EOF
+  fi
+
   exec claude --allow-dangerously-skip-permissions --permission-mode bypassPermissions --session-id "$uuid" --name "issue-$ISSUE_ID" "$prompt"
 }
 

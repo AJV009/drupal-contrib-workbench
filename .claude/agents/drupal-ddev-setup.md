@@ -1,7 +1,7 @@
 ---
 name: drupal-ddev-setup
 description: Scaffolds a DDEV environment for a drupal.org issue. Use when needing to reproduce a bug, test an MR, or set up a development environment for contributing a fix. Supports packagist install and issue fork clone modes.
-model: haiku  # Mechanical command execution; speed over reasoning
+model: sonnet  # Stronger reasoning on structured outputs (migrated from haiku per ticket 030)
 tools: Read, Bash, Glob, Grep, Write
 ---
 
@@ -45,7 +45,7 @@ Rule: If the version ends with `.x` and does not already end with `-dev`, append
 ### Phase 1: Scaffold (both modes)
 
 ```bash
-WORKBENCH="/home/alphons/project/freelygive/drupal/CONTRIB_WORKBENCH"
+WORKBENCH="/home/alphons/drupal/CONTRIB_WORKBENCH"
 ISSUE_DIR="$WORKBENCH/DRUPAL_ISSUES/{issue_id}"
 ENV_NAME="{project}"  # packagist mode
 # or ENV_NAME="issue-{project}-{issue_id}"  # fork mode
@@ -58,11 +58,35 @@ ddev start
 ddev composer create drupal/recommended-project:^11 --no-interaction
 ```
 
+### Phase 1.5: Register DDEV project in tui.json
+
+After `ddev start` succeeds, record the DDEV project name in `tui.json` so
+that `pause-orphaned-ddev.sh` can later identify this stack when the tmux
+session eventually dies. This is a **best-effort** write — if `tui.json`
+is missing or `jq` fails, continue; the pause script's `register` mode
+can backfill later.
+
+```bash
+DDEV_NAME="d{issue_id}"   # same value passed to --project-name above
+TUI="$WORKBENCH/tui.json"
+if [ -f "$TUI" ]; then
+  tmp=$(mktemp)
+  if jq --arg k "{issue_id}" --arg n "$DDEV_NAME" \
+       '.[$k] //= {} | .[$k].ddev_name = $n' "$TUI" > "$tmp"; then
+    mv "$tmp" "$TUI"
+    echo "registered tui.json[{issue_id}].ddev_name = $DDEV_NAME"
+  else
+    rm -f "$tmp"
+    echo "warn: failed to register ddev_name in tui.json (continuing)" >&2
+  fi
+fi
+```
+
 ### Phase 2: Discover Dependencies (BEFORE composer require)
 
 Fetch the module's composer.json from GitLab to find external PHP deps:
 ```bash
-curl -s "https://git.drupalcode.org/project/{module}/-/raw/{branch}/composer.json"
+./scripts/fetch-issue --mode raw-file --url "https://git.drupalcode.org/project/{module}/-/raw/{branch}/composer.json" --out -
 ```
 
 Parse the `require` section. Common external deps:

@@ -54,3 +54,9 @@
 # - github.repo
 
 dolt.shared-server: true
+
+backup.git-push: false
+
+dolt.auto-push: false
+
+dolt.auto-pull: false

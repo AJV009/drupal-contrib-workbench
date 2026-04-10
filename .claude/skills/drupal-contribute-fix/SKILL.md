@@ -10,7 +10,7 @@ description: >
 license: GPL-2.0-or-later
 metadata:
   author: Drupal Community
-  version: "1.7.0"
+  version: "1.8.0"
 ---
 
 # drupal-contribute-fix
@@ -22,6 +22,41 @@ metadata:
 > **IRON LAW (DEBUGGING):** NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST. Read the error message. Reproduce consistently. Check recent changes. Then fix.
 
 > **IRON LAW (VERIFICATION):** NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE. Run PHPCS. Run tests. See them pass. Only then say "done."
+
+## Attempt state check (MANDATORY first action)
+
+Before running anything, check whether this is a fresh run or a re-run after a
+post-fix gate failure. Read `DRUPAL_ISSUES/{issue_id}/workflow/attempt.json` if
+it exists:
+
+```bash
+if [ -f "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow/attempt.json" ]; then
+  cat "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow/attempt.json"
+fi
+```
+
+Expected shape:
+```json
+{
+  "current_attempt": 2,
+  "approach": "architectural",
+  "recovery_brief_path": "DRUPAL_ISSUES/{issue_id}/workflow/02c-recovery-brief.md"
+}
+```
+
+**Branching:**
+- If no `attempt.json` exists, or `current_attempt == 1`: this is a fresh run.
+  Proceed with preflight + Step 0.5 (pre-fix gate) normally.
+- If `current_attempt == 2`: this is a rerun after a failed post-fix gate.
+  - **Skip preflight** (already done, `UPSTREAM_CANDIDATES.json` is still valid).
+  - **Skip Step 0.5 (pre-fix gate)** (the recovery brief at
+    `recovery_brief_path` IS the pre-fix analysis — re-running opus risks
+    flip-flopping between attempts).
+  - Read the recovery brief and use it as the fix plan.
+  - Jump directly into the TDD loop with the architectural approach.
+- If `current_attempt >= 3`: **FATAL**. The circuit breaker should have fired
+  at the end of attempt 2 and escalated to the user. If you see this, STOP
+  and report the state to the user. Do not attempt a third run.
 
 ## Rules at a glance
 
@@ -51,6 +86,7 @@ Read before every session. Details for each rule live further down.
 | "The proper implementation is ~N lines, this 3-line shortcut is good enough" | Write the proper version before calling it too long. Line estimates without a draft are almost always wrong. The recursive walker in #3580690 was rationalized as "about 50 lines with two new helpers" in prose; it was ~20 lines with one helper when actually written. |
 | "This trade-off is acceptable for [the common case]" | Turn the trade-off into a failing test case with an adversarial input. If the test fails against your shortcut, the trade-off was actually a silent bug, not a trade-off. Prose justification is not evidence; a test is. #3580690's `json_encode` shortcut was justified as "safer failure mode for PII" — it was a silent bypass for every pattern targeting control chars, quotes, or backslashes. |
 | "should work", "probably fine", "seems correct" | RED FLAG. Run the verification command. Evidence, not assumptions. |
+| "I already know the architectural option won't work for this module" | The pre-fix gate exists because that confidence is exactly the anchoring bias we're fighting. Run the gate. If you're right, it'll say narrow. |
 
 **Use this skill for ANY Drupal contrib/core bug - even "local fixes".**
 
@@ -150,6 +186,105 @@ best-match issue(s)/MR(s) + reproduction steps, and suggest `drupalorg-cli`
 commands to continue the contribution. Never delete `.drupal-contribute-fix/`,
 `diffs/`, `ISSUE_COMMENT.md`, or `REPORT.md` even on "reset" requests —
 those are the artifacts that get submitted upstream.
+
+## Step 0.5: Pre-fix solution-depth gate (MANDATORY)
+
+After preflight returns (exit 0) and before any test or code is written, dispatch
+the `drupal-solution-depth-gate-pre` agent. This forces a genuine narrow-vs-
+architectural comparison before the workflow commits to an approach.
+
+> **IRON LAW:** NO FIX WITHOUT PRE-FIX DEPTH ANALYSIS. Every autonomous run goes
+> through Step 0.5. The gate is non-negotiable even on seemingly trivial fixes.
+
+### When to skip
+
+Skip Step 0.5 **only** when `workflow/attempt.json` shows `current_attempt == 2`
+(this is the architectural rerun after a failed post-fix gate — the recovery
+brief replaces the pre-fix analysis). See "Attempt state check" at the top of
+this file.
+
+### Dispatch
+
+```
+Dispatch: drupal-solution-depth-gate-pre
+Inputs:
+  issue_id = {issue_id}
+  artifacts_dir = $CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/artifacts
+  review_summary_path = $CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow/01-review-summary.json
+  depth_signals_path = $CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow/01a-depth-signals.json
+```
+
+The agent writes:
+- `DRUPAL_ISSUES/{issue_id}/workflow/01b-solution-depth-pre.md` (human-readable)
+- `DRUPAL_ISSUES/{issue_id}/workflow/01b-solution-depth-pre.json` (machine-readable)
+- `bd update <bd-id> --design ...` (best-effort)
+
+**bd write (best-effort):** Mirror the pre-fix analysis to bd:
+
+```bash
+BD_ID=$(scripts/bd-helpers.sh ensure-issue "$ISSUE_ID" "Drupal issue $ISSUE_ID" 2>/dev/null)
+if [[ -n "$BD_ID" ]] && [[ -f "$WORKFLOW_DIR/01b-solution-depth-pre.json" ]]; then
+  scripts/bd-helpers.sh phase-depth-pre "$BD_ID" "$WORKFLOW_DIR/01b-solution-depth-pre.json"
+fi
+```
+
+And returns `SOLUTION_DEPTH_PRE: decision={narrow|architectural|hybrid} must_run_post_fix={true|false}`.
+
+### What the controller does with the result
+
+1. **Read `01b-solution-depth-pre.md` in full before writing any test or code.**
+   The narrow/architectural trade-off table is the plan for what you're about to
+   implement.
+2. **Honor the `decision` field.** If the gate says `architectural`, you write
+   the architectural fix. If it says `hybrid`, you write the narrow fix now and
+   file the architectural follow-up via `bd issue create --dep
+   "discovered-from:bd-<this>"` at the end.
+3. **Remember `must_run_post_fix`.** Stash its value so you know to run Step 2.5
+   post-fix gate unconditionally, regardless of patch size.
+
+### What if the review-summary / depth-signals files don't exist?
+
+If `workflow/01-review-summary.json` or `workflow/01a-depth-signals.json` is
+missing — e.g., because `/drupal-contribute-fix` was invoked directly without
+first running `/drupal-issue-review` — create minimal versions from what you
+know and dispatch the gate anyway:
+
+```bash
+mkdir -p "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow"
+cat > "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow/01-review-summary.json" <<'JSON'
+{
+  "issue_id": {issue_id},
+  "category": "unknown",
+  "module": "{module}",
+  "module_version": "{version}",
+  "reproduction_confirmed": false,
+  "existing_mr": null,
+  "static_review_findings": []
+}
+JSON
+
+cat > "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/workflow/01a-depth-signals.json" <<JSON
+{
+  "category": "unknown",
+  "resonance_bucket": "NONE",
+  "resonance_report_path": null,
+  "reviewer_narrative": "No prior review; /drupal-contribute-fix invoked directly",
+  "recent_maintainer_comments": $(jq '[.[-5:] | .[] | {author, date: .created, body}]' "$CLAUDE_PROJECT_DIR/DRUPAL_ISSUES/{issue_id}/artifacts/comments.json" 2>/dev/null || echo '[]'),
+  "proposed_approach_sketch": "none — direct invocation"
+}
+JSON
+```
+
+The gate will still produce a depth analysis; it just won't have review-phase
+signals to lean on.
+
+### Rationalization Prevention (Pre-fix Gate)
+
+| Thought | Reality |
+|---|---|
+| "This fix is 5 lines, skip the gate" | Step 0.5 is mandatory. 5-line fixes still have a narrow-vs-architectural question. |
+| "I already know what the architectural alternative is" | You know what you ANCHORED on. The fresh subagent may see one you missed. |
+| "Dispatching another agent is slow" | Opus runtime for pre-fix is ~60 seconds. That's cheaper than reverting after push. |
 
 ## Complete Workflow
 
@@ -255,214 +390,20 @@ For rebasing when needed:
 git fetch origin && git rebase BASE_BRANCH_NAME && git push --force-with-lease
 ```
 
-## Testing
+## Testing, Pre-Push Quality Gate, and Post-Fix Depth Gate
 
-Every fix MUST include kernel tests that fail against pre-fix code and pass
-against fixed code. Non-negotiable. See IRON LAWs above. Gate exists because
-of #3542457 (code-only push bounced as Needs Work).
+> **Load on demand:** See `references/testing-and-push-gate.md` for the full
+> testing workflow (TDD Steps 1-3), Pre-Push Quality Gate (CI parity, PHPCS,
+> PHPUnit), and the post-fix solution-depth gate (Step 2.5) with its
+> compute-stats / should-run / dispatch-or-skip logic.
 
-Reference docs (open when needed, not by default):
-- `references/testing-patterns.md` - PHPUnit patterns for Drupal
-- `references/smoke-testing.md` - Curl tests, drush eval, DDEV gotchas
-- `references/common-checks.md` - Common verification scenarios
-- `references/core-testing.md` - Core-specific patterns
+## Failure Path, Recovery Brief, Circuit Breaker, and Push Gate
 
-### Step 1: Plan from the diff (before writing test code)
-
-First, discover project test infrastructure:
-```bash
-find web/modules/contrib/{module} -name "*TestBase*" -o -name "*Base*Test*" | head -10
-find web/modules/contrib/{module} -path "*/tests/*" -name "*.php" | head -20
-```
-Look for base classes that provide screenshot/video capture, pre-configured
-modules, helper traits, or mock providers. Use project base classes when
-they exist rather than building from `KernelTestBase`/`WebDriverTestBase`
-directly. (E.g. the AI module provides `BaseClassFunctionalJavascriptTests`.)
-
-For each file in the diff: NEW file tests all public methods; MODIFIED file
-tests only changed/added methods; config file verifies schema/values; test
-file itself is skipped.
-
-For each changed/new method, identify: input types and edge cases,
-error/exception paths, dependencies needing mocks. Write the plan as a
-checklist first with specific assertions ("handles empty input", "propagates
-ConnectionException"), never vague placeholders ("test error handling").
-
-### Step 2: Write the tests, then the fix (TDD)
-
-Write the test, watch it fail, write the minimal fix, watch it pass. Then
-run the full module test suite to confirm no regressions, and PHPCS on all
-new/modified files.
-
-### Step 3: Validate tests are not trivially true
-
-After tests pass against fixed code, prove they actually test the behavioral
-change:
-
-```bash
-# 1. Stash source changes, keep tests in place
-git stash push -- src/ config/ *.module *.install
-
-# 2. Run new/modified tests against unfixed code
-ddev exec ../vendor/bin/phpunit [new_test_files]
-
-# 3. Verify FAILURE (expected). Then restore.
-git stash pop
-```
-
-Results interpretation: all new tests fail = validated, tests are legitimate.
-Some pass without fix = those are trivially true (test setup, not behavioral
-change), rewrite them. All pass without fix = rewrite all. Max 2 rewrite
-cycles. Report in push gate summary: `Test Validation: N/M correctly fail
-without fix, K trivially passing`.
-
-Edge cases: test-only changes skip validation; config-only changes stash
-config files specifically; if `git stash pop` fails, `git checkout -- src/ config/`
-to restore from last commit.
-
-### Pre-Push Quality Gate
-
-Before pushing to the issue fork, ALL of these must pass:
-
-**Step 0: CI parity discovery (run first)**
-
-Mirror every CI job that will run on the module's pipeline. PHPCS + PHPUnit
-alone is not enough; modern Drupal modules enforce PHPStan, cspell,
-stylelint, and eslint too, and each skipped job is a potential CI
-round-trip.
-
-```bash
-/mnt/data/drupal/CONTRIB_WORKBENCH/scripts/local_ci_mirror.sh \
-  web/modules/contrib/<module_name>
-```
-
-Required: exit code 0 (zero failed jobs). Do NOT proceed to Steps 1-2
-below until Step 0 passes. See `references/ci-parity.md` for the full
-flag list (`--fast`, `--tests-only`, `--only`, `--skip`, `--json`),
-gotcha handling (PHPCS warnings, cspell dictionaries, eslint configs,
-`allow_failure` jobs), and failure triage (pre-existing vs caused by
-your changes).
-
-Steps 1-2 below are per-tool fallbacks for debugging a single job in
-isolation when the helper is unavailable.
-
-**Step 1: PHPCS (automatic, fallback)**
-```bash
-ddev exec phpcs --standard=Drupal,DrupalPractice --runtime-set ignore_warnings_on_exit 1 [changed_files]
-```
-Required: 0 errors. Warnings are reported but do not block.
-
-**Step 2: Tests (automatic, fallback)**
-```bash
-ddev exec phpunit [module_test_path]
-```
-Required: 0 failures, 0 errors. If tests fail, fix and re-run.
-
-**Step 3: Spec Reviewer Agent** (for feature MRs and review-only flows)
-
-Dispatch the `drupal-spec-reviewer` agent BEFORE the code reviewer. This agent
-verifies that the implementation matches the issue requirements AND that the
-issue's factual claims are accurate.
-
-- Pass: issue requirements (title, description, key comments), list of changed
-  files, what the implementer claims they did
-- Wait for: SPEC_COMPLIANT | SPEC_GAPS
-- If SPEC_GAPS: address gaps before proceeding to code review. If a gap reveals
-  a false premise (e.g., the issue claims no extension point exists but one does),
-  STOP and escalate to the user rather than continuing to review code built on
-  a wrong foundation.
-- Skip for: trivial bug fixes where the issue premise is a concrete error message
-  that you already reproduced. The spec reviewer adds value when the issue
-  describes architectural gaps, missing features, or how code "should" work.
-
-**Step 4: Reviewer Agent**
-
-ALWAYS dispatch the `drupal-reviewer` agent after code changes are complete.
-This is not conditional on change size. Every change gets reviewed.
-
-- Pass: list of changed files, module path, PHPCS results
-- Wait for: APPROVED | NEEDS_WORK | CONCERNS
-- If NEEDS_WORK: fix issues, re-dispatch (max 2 iterations)
-- If CONCERNS: include in push gate summary for user to see
-
-**Step 5: Verifier Agent**
-
-ALWAYS dispatch the `drupal-verifier` agent after code changes are complete.
-Can run in parallel with the reviewer (use `run_in_background` for one).
-
-- Pass: module path, test file paths, DDEV project name
-- If diff includes .css, .twig, .theme, or .js files, add to the verifier prompt:
-  "Visual verification required. DDEV URL: https://d{issue_id}.ddev.site.
-  Take screenshots of affected pages at desktop and mobile viewports."
-- Wait for: VERIFIED | FAILED | BLOCKED
-- If FAILED: investigate, fix, re-dispatch (max 2 iterations)
-- If BLOCKED: report to user in push gate summary
-
-All three agents (spec, reviewer, verifier) MUST report before the push gate
-is presented. Only push after all checks pass AND the user confirms (see Push
-Gate below).
-
-**Step 6: Draft Issue Comment (automatic)**
-
-Before presenting the push gate, invoke `/drupal-issue-comment` to draft a
-d.o comment summarizing the changes. Pass it: issue context, what was found,
-what was fixed, and test results. The draft is saved to
-`DRUPAL_ISSUES/{issue_id}/issue-comment-{issue_id}.html` and included in the
-push gate summary for user review.
-
-The drafting rules live in `drupal-issue-comment` SKILL.md "Humility over
-showmanship" section — read it before invoking. The three hard rules the
-draft MUST respect on first try (so it doesn't need re-trimming):
-
-1. **No "happy to change" hedges on incomplete work.** Finish in-scope
-   mechanical follow-throughs (tests, standards, naming) BEFORE drafting;
-   don't defer them to the reviewer.
-2. **No "separate follow-up" language without the three-part pre-follow-up
-   search** from `drupal-issue` Q10 having been run and documented.
-3. **No self-congratulatory filler** about tests passing or PHPCS clean.
-
-Canonical failure example (#3560681) is in `drupal-issue-comment` SKILL.md.
-
-### Push Gate (THE ONLY STOP POINT IN THE ENTIRE WORKFLOW)
-
-> **IRON LAW:** NEVER AUTO-PUSH. Always present the summary and wait for explicit user confirmation.
-
-This is the ONE place in the hands-free workflow where you stop and wait for the user.
-Everything before this point runs automatically. Nothing after this point runs without
-user confirmation.
-
-After all checks pass, present a complete summary:
-
-1. **Issue:** number, title, and what was found
-2. **Changes made:** list all modified/created files with a one-line description each
-3. **Tests:** which tests were written, how many pass, test validation results (if run)
-4. **PHPCS:** output showing 0 errors, 0 warnings (fresh, not from memory)
-5. **Spec reviewer verdict:** SPEC_COMPLIANT / SPEC_GAPS (if dispatched)
-6. **Reviewer verdict:** APPROVED / NEEDS_WORK (if reviewer agent was dispatched)
-7. **Verifier verdict:** VERIFIED / FAILED (if verifier agent was dispatched)
-8. **Visual QA:** PASS with N screenshots / N/A (no frontend changes) (from verifier report)
-9. **Comment draft:** path to the `.html` comment file (if drafted via `/drupal-issue-comment`)
-10. **What will be pushed:** the branch name, remote, and commit message
-11. **Diff summary:** files changed with +/- line counts
-
-Then ask: **"Ready to push these changes to the issue fork? (yes/no)"**
-
-Only push after the user explicitly confirms. If they say no, ask what they want to change.
-
-### Interdiff (follow-up commits to an existing MR)
-
-```bash
-BASE=$(git log --oneline | head -2 | tail -1 | cut -d' ' -f1)
-git diff $BASE..HEAD > DRUPAL_ISSUES/{issue_id}/interdiff-{issue_id}.patch
-```
-Reference the interdiff path in the push gate summary and the draft comment.
-
-### After Successful Push
-
-Dispatch `drupal-pipeline-watch` in the background (project path, MR IID,
-GitLab token) to monitor CI. Tell the user push is complete and pipeline
-monitoring is running. Then offer: monitor pipeline / post comment / stop
-DDEV (confirm before stopping) / next issue / done.
+> **Load on demand:** See `references/failure-path-and-push-gate.md` for the
+> full failure path (recovery brief template, attempt-1 diff preservation,
+> destructive revert, attempt.json write, re-invoke), the circuit breaker at
+> attempt 2, Step 5.5 (push-gate checklist + bd writes), and the Push Gate
+> (THE ONLY STOP POINT — never auto-push, present summary, wait for user).
 
 ## References
 

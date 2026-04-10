@@ -169,6 +169,81 @@ Always invoke from the workspace root with `./scripts/drupalorg`:
 ./scripts/drupalorg mr:logs <nid> <mr-iid>                # Failing job logs
 ```
 
+## Mid-work Data Fetching (drupal-issue-fetcher multi-mode)
+
+Any skill at any phase can dispatch `drupal-issue-fetcher` with a specific mode.
+11 modes available: `full`, `refresh`, `delta`, `comments`, `mr-status`, `mr-logs`,
+`search`, `issue-lookup`, `raw-file`, `related`, `mr-diff`.
+
+Dispatch: `./scripts/fetch-issue --mode <mode> --issue <id> [options]`
+
+See `docs/fetcher-modes-reference.md` for the full mode table with dispatch
+examples, required/optional flags, and output formats.
+
+Key patterns:
+- **Re-check comments:** `--mode comments` (lightweight, no MR state)
+- **Poll pipeline:** `--mode mr-status` (phar-backed, returns JSON)
+- **See what changed:** `--mode delta --since <ISO8601>` (filters to new items)
+- **Fetch a raw file:** `--mode raw-file --url <gitlab-raw-url>`
+
+## Solution Depth Gate (`/drupal-contribute-fix` Step 0.5 and Step 2.5)
+
+Every autonomous `/drupal-contribute-fix` run goes through a two-mode
+solution-depth gate that forces a narrow-vs-architectural comparison:
+
+1. **Pre-fix gate (Step 0.5, ALWAYS runs)** — fresh opus subagent reads the
+   review artifacts and drafts both a narrow and an architectural approach,
+   fills in a trade-off table, and picks narrow/architectural/hybrid. Output:
+   `DRUPAL_ISSUES/{id}/workflow/01b-solution-depth-pre.{md,json}`.
+
+2. **Post-fix gate (Step 2.5, CONDITIONAL)** — sonnet subagent reads the
+   actual drafted patch and scores it 1-5 for architectural reconsideration.
+   Runs when any of 3 triggers fires:
+   - Pre-fix agent set `must_run_post_fix: true`
+   - `lines_changed > 50` in the diff
+   - `files_touched > 3` in the diff
+
+   Output: `DRUPAL_ISSUES/{id}/workflow/02b-solution-depth-post.{md,json}`.
+   Score 1 = pass clean; 2-3 = pass with recommendation note; ≥4 = failed-revert.
+
+### Failure path
+
+When the post-fix gate returns `failed-revert`:
+1. Controller writes `workflow/02c-recovery-brief.md` (architectural plan).
+2. Controller copies `.drupal-contribute-fix/{issue_id}-*/` to
+   `.drupal-contribute-fix/attempt-1-narrow/` for reference.
+3. Controller destructively reverts the module tree (`git checkout -- .`,
+   scoped `git clean -fd -- tests/ src/ config/`).
+4. Controller writes `workflow/attempt.json` with `current_attempt: 2`.
+5. Controller re-invokes `/drupal-contribute-fix`. The attempt-state check at
+   the top of that SKILL.md skips preflight + pre-fix gate on attempt 2.
+
+### Circuit breaker
+
+Maximum 2 attempts per issue. If attempt 2 ALSO fails the post-fix gate, the
+controller stops and presents an escalation prompt to the user. No third
+attempt.
+
+### The "no inline depth analysis" rule
+
+Do NOT reason about solution depth inline in the controller. Always dispatch
+`drupal-solution-depth-gate-pre` (opus) — it is a fresh subagent specifically
+to avoid the controller's anchoring bias on whatever approach it already
+proposed.
+
+### Workflow state files (registry)
+
+The `DRUPAL_ISSUES/<id>/workflow/` directory holds phase artifacts and
+state files that drive self-healing reinstate flows (the pattern first
+introduced by ticket 030 with `attempt.json` and extended by ticket 031
+with `00-classification.json`). For the full registry of state files,
+their owners, and their preflight-check locations, see
+`docs/workflow-state-files.md`.
+
+When adding a new state file in a future ticket, update the registry
+there. The doc also documents the conventions for new state files
+(numeric prefixes, status fields, retry bounds, escalation messages).
+
 ### Git & SSH
 - Always use `git.drupal.org` (not `git.drupalcode.org`) for SSH remotes — see SSH config
 
@@ -177,6 +252,83 @@ Always invoke from the workspace root with `./scripts/drupalorg`:
 - **Never manually create MRs via GitLab URLs.** MRs are created via the "Issue fork" button on the drupal.org issue page.
 - **Switch to the issue fork early.** After reproducing/verifying an issue, check out the issue fork branch and do all remaining work (fix, tests, PHPCS) directly there. Do not develop in the DDEV composer-installed copy and transplant later.
 - **Rebasing MR branches is fine.** The drupal.org docs recommend rebasing over merging. The "X commits from branch" noise in GitLab is expected. Use `--force-with-lease` when pushing after a rebase.
+
+## Cross-issue memory (bd)
+
+bd serves as the workbench's institutional memory. Every workflow phase
+writes its artifacts to bd via `scripts/bd-helpers.sh` (never inline `bd`
+commands in skills). The fetcher queries bd for PRIOR KNOWLEDGE at the
+start of each issue, surfacing maintainer preferences, module lore, and
+historical context from prior issues in the same module.
+
+To manually add maintainer preferences or module lore:
+
+```bash
+scripts/bd-helpers.sh remember-maintainer ai marcus "prefers extending existing events"
+scripts/bd-helpers.sh remember-lore ai testing "use kernel tests for entity access checks"
+```
+
+These are surfaced automatically via `prior-knowledge.json` when working
+on any issue in the same module.
+
+All bd writes are best-effort — failure never blocks the workflow. The
+on-disk `workflow/*.json` files remain the source of truth; bd is the
+cross-issue queryability layer.
+
+## Mechanical enforcement hooks
+
+Two Claude Code hooks enforce the pre-push quality gate and workflow
+completion mechanically (exit code 2 blocks the action and feeds stderr
+back to the model):
+
+1. **PreToolUse → `.claude/hooks/push-gate.sh`**: blocks `git push`
+   unless `workflow/03-push-gate-checklist.json` exists, is < 60 min old,
+   and all verdicts pass. This is the hard gate that replaces the prose
+   IRON LAW "NEVER AUTO-PUSH."
+
+2. **Stop → `.claude/hooks/workflow-completion.sh`**: blocks Claude from
+   stopping if a review happened (`01-review-summary.json` exists within
+   the last 120 min) but the push gate wasn't reached
+   (`03-push-gate-checklist.json` missing). Forces the model to complete
+   the full pre-push quality gate before claiming "done."
+
+Both hooks also write bd memories for cross-session progress tracking
+(best-effort; bd failure never blocks the hook's primary gate function).
+
+The fix skill writes the checklist at Step 5.5, after all three review
+agents report and before the push gate summary is presented.
+
+To bypass hooks in an emergency: `claude --disable-hooks`.
+
+## Orphaned DDEV cleanup
+
+DDEV stacks accumulate when tmux sessions die (tmux server restart,
+machine reboot, manual kill). To stop any stack whose launcher-created
+tmux session is no longer alive, run:
+
+```bash
+./pause-orphaned-ddev.sh              # stop orphans
+./pause-orphaned-ddev.sh --dry-run    # preview only, no stop
+./pause-orphaned-ddev.sh register     # one-time backfill after a workbench upgrade
+```
+
+How it works: the `drupal-ddev-setup` agent writes `tui.json[<nid>].ddev_name`
+when it creates a stack. The pause script reads that mapping, checks
+each stack's recorded tmux sessions against live `tmux ls`, and stops
+any stack whose sessions are all dead (via `ddev stop`, which DDEV 1.25+
+uses instead of the older `ddev pause`). `tui.json` is NOT modified in
+default mode (only in `register` mode).
+
+Entries with an empty `sessions` array (stacks created outside the
+launcher flow) are skipped with a warning — the script can't verify
+liveness without recorded sessions, so it errs on the side of leaving
+them alone.
+
+Pre-ticket-032 stacks need a one-time `register` run to populate their
+`ddev_name` field. After that, every new issue setup registers itself
+automatically.
+
+See `docs/tui-json-schema.md` for the tui.json schema reference.
 
 ## AI Module Testing
 
@@ -218,9 +370,6 @@ Verify fixes work in DDEV environment. Uses prompt template at `skills/drupal-co
 
 **Reports:** VERIFIED (with evidence) | FAILED (with error output) | BLOCKED (with reason)
 
-### `drupal-contributor`
-DEPRECATED. Use the `/drupal-issue` skill chain instead.
-
 ### `drupal-spec-reviewer`
 Spec compliance review before code quality review. Verifies implementation matches issue requirements.
 
@@ -230,6 +379,31 @@ Spec compliance review before code quality review. Verifies implementation match
 Monitors GitLab CI pipeline after pushing to an MR. Dispatched automatically after push.
 
 **Reports:** PIPELINE_PASSED | PIPELINE_FAILED (with error extract) | PIPELINE_TIMEOUT
+
+### `drupal-ddev-setup`
+Sets up a DDEV environment for a Drupal issue. Handles packagist and fork modes, discovers composer dependencies, registers ddev_name in tui.json (ticket 032).
+
+**Reports:** DDEV_READY | FAILED (with error) | BLOCKED (with reason)
+
+### `drupal-issue-fetcher`
+Multi-mode data fetcher (11 modes: full, refresh, delta, comments, mr-status, mr-logs, search, issue-lookup, raw-file, related, mr-diff). Queries bd for PRIOR KNOWLEDGE (ticket 034).
+
+**Reports:** COMPLETE | PARTIAL | FAILED
+
+### `drupal-resonance-checker`
+Pre-classification cross-issue resonance check. Queries bd + d.o for duplicate/related issues.
+
+**Reports:** resonance report with Layer A (bd-local) + Layer B (d.o) matches
+
+### `drupal-solution-depth-gate-pre`
+Pre-fix solution-depth gate (model: opus). Forces narrow-vs-architectural comparison before code is written.
+
+**Reports:** decision={narrow|architectural|hybrid}, must_run_post_fix={true|false}
+
+### `drupal-solution-depth-gate-post`
+Post-fix solution-depth gate (model: sonnet). Scores the drafted patch 1-5 for architectural reconsideration.
+
+**Reports:** approved-as-is | approved-with-recommendation | failed-revert
 
 ## Workflow State Artifacts
 

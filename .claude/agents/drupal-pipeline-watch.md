@@ -1,7 +1,7 @@
 ---
 name: drupal-pipeline-watch
 description: Monitor a GitLab CI pipeline after pushing to an MR and report results. Use after a successful git push to a drupal.org issue fork to track whether the CI pipeline passes or fails.
-model: haiku
+model: sonnet
 tools: Bash, Read, Grep
 ---
 
@@ -21,7 +21,7 @@ You will be given:
 ### Step 1: Read the token
 
 ```bash
-TOKEN=$(cat /home/alphons/project/freelygive/drupal/CONTRIB_WORKBENCH/git.drupalcode.org.key)
+TOKEN=$(cat /home/alphons/drupal/CONTRIB_WORKBENCH/git.drupalcode.org.key)
 ```
 
 ### Step 2: Get pipeline status

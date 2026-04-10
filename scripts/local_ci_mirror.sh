@@ -149,7 +149,7 @@ skip_msg() { echo "${C_DIM}skip${C_RESET} $*"; }
 #############################################
 
 DDEV_ROOT=""
-search_dir="$(pwd)"
+search_dir="$(pwd -P)"
 while [[ "$search_dir" != "/" ]]; do
   if [[ -d "$search_dir/.ddev" ]]; then
     DDEV_ROOT="$search_dir"
@@ -159,7 +159,7 @@ while [[ "$search_dir" != "/" ]]; do
 done
 
 if [[ -z "$DDEV_ROOT" ]]; then
-  echo "Error: no .ddev directory found walking up from $(pwd)." >&2
+  echo "Error: no .ddev directory found walking up from $(pwd -P)." >&2
   echo "Run this script from inside a DDEV project." >&2
   exit 2
 fi
