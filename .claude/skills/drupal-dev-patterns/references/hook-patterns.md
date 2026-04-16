@@ -107,6 +107,41 @@ function my_module_entity_access(EntityInterface $entity, string $operation, Acc
 }
 ```
 
+### Entity Type Awareness
+
+When writing code that handles entity references (type, bundle, ID),
+always resolve these three questions before writing validation logic:
+
+**1. Content entity, config entity, or both?**
+
+| Guard | Accepts |
+|---|---|
+| `$entity instanceof ContentEntityInterface` | Nodes, terms, users, media, paragraphs |
+| `$entity instanceof ConfigEntityInterface` | Views, image styles, vocabularies, block types |
+| `$entity instanceof FieldableEntityInterface` | Content entities + config entities with fields |
+| `$entity instanceof EntityInterface` | Everything |
+
+Choose the narrowest guard that matches your use case. If you only need
+nodes, check `NodeInterface`. If you need "anything with fields on a
+form," `FieldableEntityInterface` covers both content and config entities.
+
+**2. What is the ID type?**
+
+`EntityInterface::id()` returns `string|int|null`. Content entities
+typically use auto-increment integers. Config entities use string
+machine names (e.g., `node_type:article`, `views.view.frontpage`).
+
+Never validate entity IDs with `ctype_digit()` or `is_numeric()` unless
+you have explicitly narrowed to `ContentEntityInterface` first. For
+mixed or unknown entity types, validate by loading:
+`$entityTypeManager->getStorage($type)->load($id) !== NULL`.
+
+**3. Does this entity type have bundles?**
+
+Not all entity types use bundles. Users, files, and most config entities
+are bundle-less. `$entity->bundle()` returns the entity type ID itself
+when there is no bundle. Do not treat an empty bundle as an error.
+
 #### Theme Hooks
 
 ```php
