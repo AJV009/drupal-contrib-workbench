@@ -1,0 +1,31 @@
+{
+  "$schema": "https://git.drupalcode.org/project/drupal_devkit/-/raw/main/schemas/drupal-marketplace-v1.json",
+  "name": "drupal-contrib-workbench",
+  "type": "workbench",
+  "description": "Hands-free Drupal.org contribution workbench (fetch → classify → fix → review → push gate).",
+  "version": "1.0.0",
+  "license": "GPL-2.0-or-later",
+  "maintainer": "https://github.com/AJV009/drupal-contrib-workbench",
+  "workbench": {
+    "entry_point": "./drupal-issue.sh",
+    "install": {
+      "script": "./install.sh",
+      "interactive": true
+    },
+    "prerequisites": [
+      { "command": "claude",  "required": true,  "purpose": "Claude Code CLI" },
+      { "command": "ddev",    "required": true,  "purpose": "Drupal container environments" },
+      { "command": "jq",      "required": true,  "purpose": "JSON processing" },
+      { "command": "tmux",    "required": true,  "purpose": "session management" },
+      { "command": "uuidgen", "required": true,  "purpose": "session UUID generation" },
+      { "command": "python3", "required": true,  "purpose": "scripts/lib/data helpers" },
+      { "command": "bd",      "required": false, "purpose": "beads cross-issue memory" },
+      { "command": "dolt",    "required": false, "purpose": "SQL backing for bd" },
+      { "command": "uv",      "required": false, "purpose": "temporary Python venvs" }
+    ],
+    "skills": {
+      "allow_injection": false
+    },
+    "post_install_message": "Run ./drupal-issue.sh <issue-id> to get started. See README.md for the full workflow (hooks, bd setup, DDEV conventions)."
+  }
+}
