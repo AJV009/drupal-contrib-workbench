@@ -35,7 +35,7 @@ DEFAULT_SEARCH_MAX_ISSUES = 200
 from drupalorg_api import DrupalOrgAPI, get_status_label, get_priority_label, USER_AGENT
 from drupalorg_page_parser import DrupalOrgPageParser, PageFetchError
 from gitlab_api import GitLabAPI
-from gitlab_issues_api import GitLabIssuesAPI
+from gitlab_issues_api import GitLabIssuesAPI, GitLabIssuesError
 from gitlab_transform import transform_gitlab_issue, transform_gitlab_notes
 from raw_fetch import download_raw_file, RawFetchError
 
@@ -517,6 +517,7 @@ Modes:
   mr-status     Pipeline status + mergeability for an MR (phar backend)
   mr-logs       Failing job logs for an MR (phar backend)
   raw-file      Download an arbitrary raw URL (composer.json, patch files, etc.)
+  post-note     Post a comment (GitLab issue Note) to a GitLab work-item issue
 
 Use --out - to write JSON/text output to stdout (for stdout-emitting modes).
         """,
@@ -526,7 +527,7 @@ Use --out - to write JSON/text output to stdout (for stdout-emitting modes).
         default="full",
         choices=["full", "refresh", "delta", "comments", "related",
                  "search", "issue-lookup", "mr-diff", "mr-status", "mr-logs",
-                 "raw-file"],
+                 "raw-file", "post-note"],
         help="Operation mode (default: full)",
     )
     parser.add_argument("--issue", default=None,
@@ -552,6 +553,8 @@ Use --out - to write JSON/text output to stdout (for stdout-emitting modes).
                         help="Max issues to scan for search/related (default: 200)")
     parser.add_argument("--url", default=None,
                         help="Raw URL to fetch for raw-file mode")
+    parser.add_argument("--body-file", default=None,
+                        help="Path to a file containing the note body for post-note mode")
     return parser.parse_args()
 
 
@@ -1170,6 +1173,13 @@ def mode_raw_file(log, url, out_target):
 # Dispatcher
 # ============================================================================
 
+def mode_post_note(project, issue_id, body_file, gitlab_token_file=None):
+    gi = (GitLabIssuesAPI.from_token_file(gitlab_token_file)
+          if gitlab_token_file else GitLabIssuesAPI())
+    body = Path(body_file).read_text()
+    return gi.post_issue_note(project, issue_id, body)
+
+
 def main():
     args = parse_args()
     log = FetchLog()
@@ -1180,10 +1190,10 @@ def main():
         # for URL construction and API calls. Phar-backed modes (mr-status,
         # mr-logs) don't — phar resolves the project from the nid itself.
         "full", "refresh", "delta", "comments", "related",
-        "search", "issue-lookup", "mr-diff",
+        "search", "issue-lookup", "mr-diff", "post-note",
     }
     needs_issue = {"full", "refresh", "delta", "comments", "related",
-                   "issue-lookup", "mr-status", "mr-logs"}
+                   "issue-lookup", "mr-status", "mr-logs", "post-note"}
     needs_mr_iid = {"mr-diff", "mr-status", "mr-logs"}
     needs_out_dir = {"full", "refresh", "delta", "comments", "related"}
 
@@ -1193,7 +1203,12 @@ def main():
     issue_id = None
     project = args.project
     source_modes = {"full", "refresh", "delta", "comments", "related", "issue-lookup"}
-    if args.issue and args.mode in source_modes:
+    if args.mode == "post-note":
+        # post-note targets a GitLab work-item directly: take project and issue
+        # (the GitLab iid) verbatim, no source resolution or URL parsing.
+        project = args.project
+        issue_id = args.issue
+    elif args.issue and args.mode in source_modes:
         if args.source == "auto":
             from source_resolver import resolve, ResolveError
             try:
@@ -1228,6 +1243,9 @@ def main():
         sys.exit(2)
     if args.mode == "delta" and not args.since:
         print("ERROR: --since is required for delta mode", file=sys.stderr)
+        sys.exit(2)
+    if args.mode == "post-note" and not args.body_file:
+        print("ERROR: --body-file is required for post-note mode", file=sys.stderr)
         sys.exit(2)
 
     out_dir = None
@@ -1276,6 +1294,16 @@ def main():
             print("ERROR: --url is required for raw-file mode", file=sys.stderr)
             sys.exit(2)
         rc = mode_raw_file(log, args.url, args.out)
+    elif args.mode == "post-note":
+        try:
+            result = mode_post_note(project, issue_id, args.body_file,
+                                    gitlab_token_file=args.gitlab_token_file)
+            _emit_json(result, args.out if args.out else None)
+            rc = 0
+        except GitLabIssuesError as e:
+            url = f"https://git.drupalcode.org/{project}/-/work_items/{issue_id}"
+            print(f"PARTIAL: {e}; post the note manually at {url}", file=sys.stderr)
+            rc = 1
     else:
         print(f"ERROR: unknown mode '{args.mode}'", file=sys.stderr)
         sys.exit(2)
