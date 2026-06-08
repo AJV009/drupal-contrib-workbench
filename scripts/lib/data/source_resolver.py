@@ -1,8 +1,11 @@
 """Resolve a drupal.org issue identifier to its source (legacy d.o queue or GitLab work-item)."""
 
 import re
+import urllib.request
 
 GITLAB_HOST = "git.drupalcode.org"
+
+_DEFAULT_UA = "drupal-contrib-workbench-source-resolver/1.0"
 
 
 class ResolveError(Exception):
@@ -49,3 +52,41 @@ def parse_identifier(identifier):
         return {"needs_probe": True, "iid": s, "project_hint": None}
 
     raise ResolveError(f"unrecognized issue identifier: {identifier!r}")
+
+
+def _default_opener(url):
+    req = urllib.request.Request(url, method="GET", headers={"User-Agent": _DEFAULT_UA})
+    return urllib.request.urlopen(req, timeout=20)
+
+
+def resolve(identifier, opener=None):
+    parsed = parse_identifier(identifier)
+    if not parsed.get("needs_probe"):
+        return parsed
+
+    iid = parsed["iid"]
+    project_hint = parsed.get("project_hint")
+    if project_hint:
+        probe_url = f"https://www.drupal.org/project/{project_hint}/issues/{iid}"
+    else:
+        probe_url = f"https://www.drupal.org/i/{iid}"
+
+    try:
+        with (opener or _default_opener)(probe_url) as resp:
+            final = resp.geturl()
+    except Exception as e:
+        raise ResolveError(f"redirect probe failed for {probe_url}: {e}")
+
+    m = _RE_GITLAB.match(final)
+    if m:
+        project, fiid = m.group(1), m.group(2)
+        return {"source": "gitlab", "project": project, "iid": fiid, "url": final}
+
+    m = _RE_DO_PROJECT.match(final)
+    if m:
+        return {"source": "do", "project": m.group(1), "iid": m.group(2), "url": final}
+
+    raise ResolveError(
+        f"could not resolve {identifier!r} (final url: {final}). "
+        f"For a GitLab-native issue pass a full work_items URL or `project#iid`."
+    )
