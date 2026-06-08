@@ -728,6 +728,11 @@ def mode_full(log, out_dir, project, issue_id, gitlab_token_file=None,
         "comments": comments,
     })
 
+    # MR discovery uses GitLabAPI (gitlab_api.py), which prefixes "project/"
+    # itself and therefore expects the short project name. The GitLab-issue
+    # branch carries the full "project/<name>" namespace; normalize to short.
+    project = project.split("/", 1)[1] if project.startswith("project/") else project
+
     # 3. Search for GitLab MRs
     if gitlab_token_file:
         gl = GitLabAPI.from_token_file(gitlab_token_file)
