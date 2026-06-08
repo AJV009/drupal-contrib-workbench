@@ -37,6 +37,7 @@ from drupalorg_page_parser import DrupalOrgPageParser, PageFetchError
 from gitlab_api import GitLabAPI
 from gitlab_issues_api import GitLabIssuesAPI, GitLabIssuesError
 from gitlab_transform import transform_gitlab_issue, transform_gitlab_notes
+from gitlab_label_map import classify_labels
 from raw_fetch import download_raw_file, RawFetchError
 
 
@@ -908,6 +909,43 @@ def mode_issue_lookup(log, project, issue_id, out_target, source="do"):
 # Mode: search (client-side keyword match against project issue batch)
 # ============================================================================
 
+def _normalize_match(source, *, id, nid, title, status_code, status_label, url, changed):
+    """Build a search match with the canonical schema shared by both sources."""
+    return {
+        "source": source,
+        "id": str(id),
+        "nid": nid,
+        "title": title,
+        "status_code": status_code,
+        "status_label": status_label,
+        "url": url,
+        "changed": changed,
+    }
+
+
+def _gitlab_hit_to_match(h):
+    """Normalize a GitLab issue search hit into the canonical match schema.
+
+    Status comes from a `state::` scoped label when present; otherwise it falls
+    back to GitLab's own opened/closed state (with no numeric code)."""
+    classified = classify_labels(h.get("labels", []))
+    status = classified["status"]
+    if status.get("label") is None:
+        gl_state = h.get("state")
+        status = {"code": None, "label": gl_state.capitalize() if gl_state else None}
+    iid = h.get("iid")
+    return _normalize_match(
+        "gitlab",
+        id=iid,
+        nid=int(iid) if iid is not None else None,
+        title=h.get("title"),
+        status_code=status.get("code"),
+        status_label=status.get("label"),
+        url=h.get("web_url"),
+        changed=h.get("updated_at"),
+    )
+
+
 def _search_do(project, keywords):
     """Search the d.o issue queue by title keywords (AND-matched).
 
@@ -916,7 +954,7 @@ def _search_do(project, keywords):
         keywords: List of keyword strings or a single search string.
 
     Returns:
-        List of normalized match dicts (id, title, url, ...).
+        Tuple of (list of normalized match dicts, count of issues scanned).
 
     Raises:
         Exception: If the project cannot be resolved.
@@ -935,27 +973,35 @@ def _search_do(project, keywords):
     for raw in issues:
         title = raw.get("title", "").lower()
         if all(k in title for k in keywords_lower):
-            matched.append({
-                "id": str(raw.get("nid", 0)),
-                "nid": int(raw.get("nid", 0)),
-                "title": raw.get("title", ""),
-                "status_code": raw.get("field_issue_status"),
-                "status_label": get_status_label(raw.get("field_issue_status")),
-                "url": f"https://www.drupal.org/node/{raw.get('nid')}",
-                "changed": unix_to_iso(raw.get("changed")),
-            })
-    return matched
+            matched.append(_normalize_match(
+                "do",
+                id=raw.get("nid", 0),
+                nid=int(raw.get("nid", 0)),
+                title=raw.get("title", ""),
+                status_code=raw.get("field_issue_status"),
+                status_label=get_status_label(raw.get("field_issue_status")),
+                url=f"https://www.drupal.org/node/{raw.get('nid')}",
+                changed=unix_to_iso(raw.get("changed")),
+            ))
+    return matched, len(issues)
 
 
 def search_all(project, keywords, gitlab_token_file=None):
-    """Search both the d.o issue queue and GitLab issues; merge + dedupe gitlab by iid."""
-    results = []
+    """Search both the d.o issue queue and GitLab issues.
+
+    Returns a dict {matches, errors, total_scanned}. All matches share the
+    canonical schema (see _normalize_match) regardless of source. GitLab hits
+    are deduped by iid. One source failing is recorded in `errors`, not fatal.
+    """
+    matches = []
+    errors = []
+    total_scanned = 0
     try:
-        for r in _search_do(project, keywords):
-            r.setdefault("source", "do")
-            results.append(r)
+        do_matches, scanned = _search_do(project, keywords)
+        matches.extend(do_matches)
+        total_scanned += scanned
     except Exception as e:  # one source failing must not kill the other
-        results.append({"source": "do", "error": str(e)})
+        errors.append({"source": "do", "error": str(e)})
     gi = (GitLabIssuesAPI.from_token_file(gitlab_token_file)
           if gitlab_token_file else GitLabIssuesAPI())
     kw_str = " ".join(keywords) if isinstance(keywords, (list, tuple)) else keywords
@@ -970,27 +1016,26 @@ def search_all(project, keywords, gitlab_token_file=None):
             if key in seen:
                 continue
             seen.add(key)
-            results.append({"source": "gitlab", "id": str(h.get("iid")),
-                            "title": h.get("title"), "url": h.get("web_url")})
-    return results
+            matches.append(_gitlab_hit_to_match(h))
+    return {"matches": matches, "errors": errors, "total_scanned": total_scanned}
 
 
 def mode_search(log, project, keywords, max_issues, out_target, gitlab_token_file=None):
     global DEFAULT_SEARCH_MAX_ISSUES
     DEFAULT_SEARCH_MAX_ISSUES = max_issues
-    results = log.track(
+    result = log.track(
         "search_all",
         lambda: search_all(project, keywords, gitlab_token_file=gitlab_token_file),
     )
-    matches = [r for r in results if "error" not in r]
-    errors = [r for r in results if "error" in r]
-    for err in errors:
+    matches = result["matches"]
+    for err in result["errors"]:
         log.error("search", f"{err['source']}: {err['error']}")
 
     log.finalize()
     _emit_json({
         "project": project,
         "keywords": keywords,
+        "total_scanned": result["total_scanned"],
         "match_count": len(matches),
         "matches": matches,
     }, out_target)
