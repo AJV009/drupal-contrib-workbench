@@ -129,6 +129,11 @@ Environment-specific traps. Most of these have burned us at least once.
 - **Test-validation stash recovery.** If `git stash pop` fails during
   Testing Step 3, use `git checkout -- src/ config/ *.module *.install` to
   restore from last commit. Do not try fancier recovery paths.
+- **Dual issue sources do not change this skill.** For `gitlab`-sourced
+  issues (`issue.json["source"] == "gitlab"`) the MR/fork/push flow is
+  unchanged: it was always GitLab. Mid-work issue-thread re-fetch via
+  `./scripts/fetch-issue --mode comments` auto-detects the source, so polling
+  the thread works identically. The push gate is unchanged for both sources.
 
 ## Before You Begin
 

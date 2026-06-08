@@ -164,6 +164,35 @@ Drupal.org Filtered HTML supports:
 
 Issue references auto-link: `[#1234567]` becomes a clickable link to that issue.
 
+## Source-aware format (read `issue.json["source"]` first)
+
+Before drafting, read `source` from `DRUPAL_ISSUES/{issue_number}/artifacts/issue.json`.
+The format and posting path branch on it.
+
+### `source == "do"` (default, legacy d.o queue)
+
+Use the Filtered HTML format described in this skill (the `<h2>`-`<dd>` tag
+set above, `[#NNNNNN]` issue links). Posting is manual: the contributor
+pastes the `.html` file into the d.o comment box. This is the existing
+behavior, unchanged.
+
+### `source == "gitlab"` (migrated GitLab work-item)
+
+Draft the note as **GitLab-flavored Markdown**, not d.o Filtered HTML.
+References use GitLab syntax:
+
+| Reference | Syntax |
+|---|---|
+| Issue in the same project | `#<iid>` |
+| Issue in another project | `<project>#<iid>` |
+| Merge request | `!<mr_iid>` |
+
+Standard Markdown applies: `**bold**`, `_italic_`, fenced ```` ``` ```` code
+blocks, `-`/`1.` lists, `> ` blockquotes, `[text](url)` links. Inline images
+use `![alt](url)`. The tone, humility rules, and quality gate below still
+apply. Save the draft as `.md` (not `.html`) at
+`DRUPAL_ISSUES/{issue_number}/issue-comment-{issue_number}.md`.
+
 ## Screenshots
 
 ### Capturing
@@ -382,6 +411,42 @@ DRUPAL_ISSUES/{issue_number}/issue-comment-{issue_number}.html
 
 This file contains ONLY the comment body HTML, no wrapper, no doctype, no head.
 Ready to copy-paste into the d.o comment box.
+
+For `source == "gitlab"` issues the file is `.md` (GitLab-flavored Markdown,
+see "Source-aware format" above), not `.html`.
+
+## Posting (source-dependent)
+
+After the draft is written and the user has picked a version at the Filter 4
+stop-gate, the posting path depends on `issue.json["source"]`.
+
+### `source == "do"`
+
+Leave the `.html` file for the contributor to paste into the d.o comment box.
+The workbench does not auto-publish to drupal.org. This is the existing
+behavior.
+
+### `source == "gitlab"`
+
+After presenting the draft, ASK the user: **"Post this note to the issue
+now?"** (mirror the d.o manual-post stop point; never auto-publish).
+
+- **YES**: post it via the fetcher's `post-note` mode:
+
+  ```bash
+  ./scripts/fetch-issue --mode post-note \
+    --issue <iid> \
+    --project project/<project> \
+    --body-file DRUPAL_ISSUES/{issue_number}/issue-comment-{issue_number}.md \
+    --gitlab-token-file git.drupalcode.org.key
+  ```
+
+  `<iid>` and `<project>` come from `issue.json`. If the command returns a
+  `PARTIAL: ...` line (read-only or missing token), tell the user to paste
+  the note manually at the issue `url` from `issue.json`.
+
+- **NO**: leave the `.md` draft for the user to post manually (same as the
+  d.o path).
 
 ## TUI Browser Integration (MANDATORY)
 
