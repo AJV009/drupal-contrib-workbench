@@ -73,18 +73,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# --- Extract numeric issue ID ---
-if [[ "$INPUT" =~ ^[0-9]+$ ]]; then
-  ISSUE_ID="$INPUT"
-elif [[ "$INPUT" =~ drupal\.org/i/([0-9]+) ]]; then
-  ISSUE_ID="${BASH_REMATCH[1]}"
-elif [[ "$INPUT" =~ drupal\.org/project/[^/]+/issues/([0-9]+) ]]; then
-  ISSUE_ID="${BASH_REMATCH[1]}"
-else
-  echo "Error: Could not extract issue ID from '$INPUT'" >&2
-  echo "Expected a numeric ID or a drupal.org issue URL." >&2
+# --- Resolve issue source (d.o queue vs GitLab work-item) ---
+# Calls the Python resolver up front so the rest of the script knows the
+# source, project, and numeric iid. Bare numbers / d.o URLs may trigger a
+# network redirect probe; GitLab work_items URLs and project#iid shorthand
+# resolve offline.
+RESOLVED_JSON="$(python3 "$SCRIPT_DIR/scripts/lib/data/source_resolver_cli.py" "$INPUT" 2>/dev/null)" || {
+  echo "Could not resolve issue '$INPUT'. For a GitLab-native issue pass a full" >&2
+  echo "work_items URL or project#iid shorthand (e.g. canvas#5)." >&2
   exit 1
-fi
+}
+ISSUE_SOURCE="$(printf '%s' "$RESOLVED_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["source"])')"
+ISSUE_PROJECT="$(printf '%s' "$RESOLVED_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["project"])')"
+ISSUE_IID="$(printf '%s' "$RESOLVED_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["iid"])')"
+
+# ISSUE_ID is the canonical numeric iid used for session map keys, the
+# DRUPAL_ISSUES/{id} working dir, and skill invocations. URLs and shorthand
+# all collapse onto this iid.
+ISSUE_ID="$ISSUE_IID"
 
 # --- Ensure session map exists ---
 if [[ ! -f "$MAP_FILE" ]]; then
