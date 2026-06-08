@@ -47,6 +47,22 @@ session unless the prompt says otherwise.
 7. **Create a Merge Request** on drupal.org linking to the issue
 8. Wait for **review → RTBC → commit** cycle
 
+### Dual issue sources
+
+drupal.org is migrating issues from the legacy issue queue to GitLab
+work-items. The workbench auto-detects which source an issue lives on (via a
+redirect probe) and handles both transparently. Accepted identifier forms at
+the fetcher entry point:
+
+- bare number: works for legacy and migrated issues (resolved via redirect)
+- full work_items URL: `https://git.drupalcode.org/project/<name>/-/work_items/<iid>`
+- `project#iid` shorthand: needed for NEW GitLab-native issues, whose small
+  per-project IIDs are not globally unique
+
+`issue.json` always carries a `source` field (`do` or `gitlab`). See
+`docs/fetcher-modes-reference.md` for the `--source` flag and the
+dual-source `search` / `post-note` modes.
+
 ## Coding Standards (Non-Negotiable)
 
 - `declare(strict_types=1)` in every PHP file

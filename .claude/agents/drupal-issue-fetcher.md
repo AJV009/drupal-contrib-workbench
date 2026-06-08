@@ -29,7 +29,27 @@ The controller gets one dispatch contract. The data layer gets one retry
 surface. You get to be terse in your return values because every caller
 knows what structure to expect from each mode.
 
-## The 10 modes
+## Source resolution
+
+drupal.org is migrating issues from the legacy issue queue to GitLab
+work-items. A global `--source auto|do|gitlab` flag (default `auto`) tells the
+data layer which source to read. In `auto`, the fetcher does a **redirect
+probe** on the bare number: a redirect to GitLab work-items means the issue
+migrated (`source=gitlab`), otherwise it is legacy (`source=do`). `--source`
+is accepted by the data-layer modes (`full`, `refresh`, `delta`, `comments`,
+`related`, `issue-lookup`).
+
+Three accepted `--issue` identifier forms:
+
+- bare number — legacy and migrated issues (resolved via redirect)
+- full work_items URL — `https://git.drupalcode.org/project/<name>/-/work_items/<iid>`
+- `project#iid` shorthand — required for NEW GitLab-native issues, whose small
+  per-project IIDs are not globally unique
+
+`issue.json` always carries a `source` field; GitLab issues also carry `iid`
+(aliased to `nid`), and `DRUPAL_ISSUES/<id>` is keyed on the resolved iid.
+
+## The 11 modes
 
 | Mode | Use case | Output |
 |---|---|---|
@@ -38,14 +58,15 @@ knows what structure to expect from each mode.
 | `delta` | "What changed since timestamp X?" — mid-work poll | `full` artifacts with comments/discussions filtered to items after `--since` |
 | `comments` | Just re-pull comments + issue metadata (lighter than full) | `issue.json` + `comments.json` + `fetch-log.json` |
 | `related` | Classification/resonance context: recent project issues | `related-issues.json` |
-| `search` | Keyword search across a project's issues | JSON to stdout/file (match list) |
+| `search` | Dual-source keyword search (d.o queue + GitLab issues, project and global), merged | JSON to stdout/file (match list) |
 | `issue-lookup` | Lightweight metadata only for a referenced issue | JSON to stdout/file (no comments, no MRs) |
 | `mr-diff` | Single MR's unified diff | Plain diff text to stdout/file |
 | `mr-status` | Pipeline state + mergeability for an MR (phar-backed) | JSON to stdout/file |
 | `mr-logs` | Failing job logs for an MR's latest pipeline (phar-backed) | Job log text to stdout/file. Returns 404 on passing pipelines — that's expected phar behavior, not an error on your side. |
 | `raw-file` | Download an arbitrary raw URL (composer.json, .patch files, anything the API clients don't cover) | Raw text to stdout/file |
+| `post-note` | Post a GitLab issue Note (write mode, GitLab issues only) | Status line to stderr; PARTIAL with manual-post URL if token missing/read-only |
 
-## Dispatch — one command, 10 modes
+## Dispatch — one command, 11 modes
 
 All modes invoke the same wrapper from the workbench root:
 
@@ -69,6 +90,8 @@ Common args:
 - `--keywords <k1> <k2> ...` — Required for `search` (AND-matched against title).
 - `--max-issues <n>` — For `search`/`related`, default 200.
 - `--no-cache` — Implicit in `refresh` mode.
+- `--source <auto|do|gitlab>` — Issue source resolution, default `auto` (see "Source resolution" above). Data-layer modes only.
+- `--body-file <path>` — Required for `post-note` (the Note body). Also needs `--issue <iid>`, `--project project/<name>`, and `--gitlab-token-file git.drupalcode.org.key`.
 
 All modes write status lines (`COMPLETE: mode=X requests=N errors=M` or
 `PARTIAL: ...`) to **stderr** so stdout stays clean for piping JSON output.
@@ -251,10 +274,10 @@ assessment.
 
 ---
 
-## Additional Modes (refresh, delta, comments, related, search, issue-lookup, mr-diff, mr-status, mr-logs, raw-file)
+## Additional Modes (refresh, delta, comments, related, search, issue-lookup, mr-diff, mr-status, mr-logs, raw-file, post-note)
 
 > **Load on demand:** See `references/fetcher-modes-detail.md` for full
-> documentation of all 10 non-full modes, including dispatch examples,
+> documentation of all 11 non-full modes, including dispatch examples,
 > return formats, and the mid-work re-fetch quick reference table.
 
 ## Gotchas
