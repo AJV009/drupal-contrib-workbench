@@ -681,7 +681,7 @@ def mode_full(log, out_dir, project, issue_id, gitlab_token_file=None,
         raw_notes = log.track("gitlab.notes", lambda: gi.get_issue_notes(project, issue_id))
         events = log.track("gitlab.label_events",
                            lambda: gi.get_resource_label_events(project, issue_id))
-        comments = transform_gitlab_notes(raw_notes, events, since=since)
+        comments = transform_gitlab_notes(raw_notes, events, since=since, project=project)
         comments_source = "gitlab"
         hidden_branches = set()
     else:
@@ -843,7 +843,7 @@ def mode_comments(log, out_dir, project, issue_id, since=None, source="do"):
         raw_notes = log.track("gitlab.notes", lambda: gi.get_issue_notes(project, issue_id))
         events = log.track("gitlab.label_events",
                            lambda: gi.get_resource_label_events(project, issue_id))
-        comments = transform_gitlab_notes(raw_notes, events, since=since)
+        comments = transform_gitlab_notes(raw_notes, events, since=since, project=project)
         source = "gitlab"
     else:
         api = DrupalOrgAPI()
@@ -958,10 +958,11 @@ def search_all(project, keywords, gitlab_token_file=None):
         results.append({"source": "do", "error": str(e)})
     gi = (GitLabIssuesAPI.from_token_file(gitlab_token_file)
           if gitlab_token_file else GitLabIssuesAPI())
+    kw_str = " ".join(keywords) if isinstance(keywords, (list, tuple)) else keywords
     seen = set()
     for finder, scope in ((gi.search_project_issues, project), (gi.search_global_issues, None)):
         try:
-            hits = finder(scope, keywords) if scope else finder(keywords)
+            hits = finder(scope, kw_str) if scope else finder(kw_str)
         except Exception:
             hits = []
         for h in hits:
@@ -1227,7 +1228,7 @@ def main():
                 project = r["project"]
             else:
                 project = project or r["project"]
-            issue_id = r["iid"]
+            issue_id = int(r["iid"])
         else:
             parsed_project, issue_id = parse_issue_url(args.issue)
             project = parsed_project or project

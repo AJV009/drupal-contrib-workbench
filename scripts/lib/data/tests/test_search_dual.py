@@ -16,3 +16,25 @@ def test_search_merges_do_and_gitlab(monkeypatch):
     titles = {r["title"] for r in results}
     assert "do hit" in titles and "gl hit" in titles
     assert all("source" in r for r in results)
+
+
+def test_search_gitlab_receives_joined_keyword_string(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(fetch_issue, "_search_do",
+                        lambda project, kw: [], raising=False)
+
+    def cap_project(self, p, kw):
+        captured["project"] = kw
+        return []
+
+    def cap_global(self, kw):
+        captured["global"] = kw
+        return []
+
+    monkeypatch.setattr(GitLabIssuesAPI, "search_project_issues", cap_project)
+    monkeypatch.setattr(GitLabIssuesAPI, "search_global_issues", cap_global)
+    fetch_issue.search_all(project="project/canvas",
+                           keywords=["timezone", "datetime"],
+                           gitlab_token_file=None)
+    assert captured["project"] == "timezone datetime"
+    assert captured["global"] == "timezone datetime"

@@ -97,9 +97,22 @@ def _label_events_to_changes(events, note_created):
     return changes
 
 
-def _extract_mr_refs(body):
-    """Return a sorted, unique list of MR reference strings in the body."""
-    return sorted({m.group(0) for m in _MR_REF_RE.finditer(body or "")})
+def _extract_mr_refs(body, project=None):
+    """Return a sorted, unique list of MR reference strings in the body.
+
+    Bare ``!NNN`` references resolve to full MR URLs when ``project`` is given,
+    matching the d.o path which always yields full URLs.
+    """
+    refs = set()
+    for m in _MR_REF_RE.finditer(body or ""):
+        bang = m.group(1)
+        if bang is not None and project:
+            refs.add(
+                f"https://git.drupalcode.org/{project}/-/merge_requests/{bang}"
+            )
+        else:
+            refs.add(m.group(0))
+    return sorted(refs)
 
 
 def _extract_images(body):
@@ -112,8 +125,13 @@ def _extract_images(body):
     return out
 
 
-def transform_gitlab_notes(raw_notes, label_events, since=None):
-    """Transform GitLab notes + label events into a bare list of comment dicts."""
+def transform_gitlab_notes(raw_notes, label_events, since=None, project=None):
+    """Transform GitLab notes + label events into a bare list of comment dicts.
+
+    ``field_changes`` is populated only when a label event's ``created_at``
+    exactly matches a note's ``created_at`` (what GitLab emits for live UI label
+    changes). No fuzzy attachment is performed.
+    """
     ordered = sorted(raw_notes, key=lambda n: n.get("created_at") or "")
     notes = []
     number = 0
@@ -134,36 +152,9 @@ def transform_gitlab_notes(raw_notes, label_events, since=None):
             "created": created,
             "body_html": body,
             "is_system_message": bool(note.get("system")),
-            "mr_references": _extract_mr_refs(body),
+            "mr_references": _extract_mr_refs(body, project),
             "field_changes": _label_events_to_changes(label_events, created),
             "images": _extract_images(body),
         })
 
-    _attach_orphan_events(notes, label_events)
     return notes
-
-
-def _attach_orphan_events(notes, label_events):
-    """Attach label events not matched by exact timestamp to the nearest note.
-
-    Migrated GitLab issues record label history (events) and discussion (notes)
-    with independent timestamps that rarely coincide. Events already matched to
-    a note via exact ``created_at`` stay there; any remaining event is attached
-    to the earliest note recorded at or after it, so the label history still
-    surfaces in the unified comment stream.
-    """
-    if not notes:
-        return
-    matched_ts = {n["created"] for n in notes}
-    for ev in label_events:
-        ev_created = ev.get("created_at")
-        if ev_created in matched_ts:
-            continue
-        change = _event_change(ev)
-        if not change:
-            continue
-        target = next(
-            (n for n in notes if n["created"] and n["created"] >= ev_created),
-            notes[-1],
-        )
-        target["field_changes"].append(change)
