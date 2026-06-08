@@ -247,6 +247,7 @@ def transform_issue(raw, project):
         cat_code = None
 
     return {
+        "source": "do",
         "nid": nid,
         "title": raw.get("title", ""),
         "url": f"https://www.drupal.org/project/{project}/issues/{nid}",
