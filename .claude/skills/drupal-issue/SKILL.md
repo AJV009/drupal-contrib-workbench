@@ -145,6 +145,19 @@ and prevents hours of wrong-direction work.
   Use the UI search for keyword queries:
   `https://www.drupal.org/project/issues/search/<project>?text=<keywords>`.
 
+### Source awareness (dual issue sources)
+
+`issue.json` always carries a `source` field: `"do"` (legacy drupal.org
+queue) or `"gitlab"` (migrated GitLab work-item). Read it, but no behavior
+changes beyond that:
+
+- Both sources expose the **same normalized fields** (`status{code,label}`,
+  priority, category, version), so read metadata identically.
+- For `gitlab`, the issue lives at the `url` field (a GitLab work-item URL,
+  with `iid` and `nid` aliased to the iid), and the thread is still
+  `comments.json` (GitLab Notes in the same envelope/schema as d.o comments).
+- MR/fork flow is unchanged across both sources (always GitLab).
+
 ## Step 0: Fetch issue data
 
 Immediately dispatch the `drupal-issue-fetcher` agent (no preamble, no announcement):

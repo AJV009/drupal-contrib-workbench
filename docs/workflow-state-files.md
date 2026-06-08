@@ -20,6 +20,19 @@ an owner skill and (where applicable) a preflight-check location.
 | `attempt.json` | `/drupal-contribute-fix` failure path | `current_attempt: 1\|2\|>=3` | `/drupal-contribute-fix` "Attempt state check" | 030 |
 | `03-push-gate-checklist.json` | `/drupal-contribute-fix` Step 5.5 | (no status; verdicts checked by hooks) | `.claude/hooks/push-gate.sh` + `.claude/hooks/workflow-completion.sh` | 039 |
 
+## issue.json source field (artifacts/)
+
+`issue.json` (written by the fetcher under
+`DRUPAL_ISSUES/<id>/artifacts/`, not the `workflow/` dir) now always carries
+a `source` field with value `do` (legacy drupal.org issue queue) or `gitlab`
+(migrated GitLab work-item). For GitLab issues it also carries an `iid` field
+aliased to `nid` (the same value under both keys, since GitLab uses a per-
+project IID where the legacy queue uses a global node id).
+
+The `DRUPAL_ISSUES/<id>` directory is keyed on the **resolved iid**: for a
+migrated/GitLab-native issue, `<id>` is the GitLab IID, not the old node id.
+See `docs/fetcher-modes-reference.md` for the `--source` resolution flag.
+
 ## Reinstate pattern
 
 When a state file has a field that indicates an upstream step did not

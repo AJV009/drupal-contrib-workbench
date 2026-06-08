@@ -73,18 +73,48 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# --- Extract numeric issue ID ---
-if [[ "$INPUT" =~ ^[0-9]+$ ]]; then
-  ISSUE_ID="$INPUT"
-elif [[ "$INPUT" =~ drupal\.org/i/([0-9]+) ]]; then
-  ISSUE_ID="${BASH_REMATCH[1]}"
-elif [[ "$INPUT" =~ drupal\.org/project/[^/]+/issues/([0-9]+) ]]; then
-  ISSUE_ID="${BASH_REMATCH[1]}"
+# --- Resolve issue source (d.o queue vs GitLab work-item) ---
+# Calls the Python resolver up front so the rest of the script knows the
+# source, project, and numeric iid. Bare numbers / d.o URLs may trigger a
+# network redirect probe; GitLab work_items URLs and project#iid shorthand
+# resolve offline.
+if RESOLVED_JSON="$(python3 "$SCRIPT_DIR/scripts/lib/data/source_resolver_cli.py" "$INPUT" 2>/dev/null)"; then
+  ISSUE_SOURCE="$(printf '%s' "$RESOLVED_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["source"])')"
+  ISSUE_PROJECT="$(printf '%s' "$RESOLVED_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["project"])')"
+  ISSUE_IID="$(printf '%s' "$RESOLVED_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["iid"])')"
+  ISSUE_URL="$(printf '%s' "$RESOLVED_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["url"])')"
 else
-  echo "Error: Could not extract issue ID from '$INPUT'" >&2
-  echo "Expected a numeric ID or a drupal.org issue URL." >&2
-  exit 1
+  # Resolver failed (commonly a network blip on the redirect probe that bare
+  # numbers / www.drupal.org URLs trigger). Fall back to d.o for plainly
+  # numeric or d.o-URL input so the offline-friendly common case keeps working.
+  if [[ "$INPUT" =~ ^[0-9]+$ ]]; then
+    ISSUE_IID="$INPUT"
+  elif [[ "$INPUT" == http://www.drupal.org/* || "$INPUT" == https://www.drupal.org/* ]]; then
+    # d.o issue URL: the trailing path segment is the numeric node id.
+    do_tail="${INPUT%/}"
+    do_tail="${do_tail##*/}"
+    if [[ "$do_tail" =~ ^[0-9]+$ ]]; then
+      ISSUE_IID="$do_tail"
+    else
+      echo "Could not resolve issue '$INPUT'. For a GitLab-native issue pass a full" >&2
+      echo "work_items URL or project#iid shorthand (e.g. canvas#5)." >&2
+      exit 1
+    fi
+  else
+    echo "Could not resolve issue '$INPUT'. For a GitLab-native issue pass a full" >&2
+    echo "work_items URL or project#iid shorthand (e.g. canvas#5)." >&2
+    exit 1
+  fi
+  ISSUE_SOURCE="do"
+  ISSUE_PROJECT=""
+  ISSUE_URL="https://www.drupal.org/i/$ISSUE_IID"
+  echo "Warning: source auto-detection skipped (network probe failed); treating '$INPUT' as a d.o issue (#$ISSUE_IID)." >&2
 fi
+
+# ISSUE_ID is the canonical numeric iid used for session map keys, the
+# DRUPAL_ISSUES/{id} working dir, and skill invocations. URLs and shorthand
+# all collapse onto this iid.
+ISSUE_ID="$ISSUE_IID"
 
 # --- Ensure session map exists ---
 if [[ ! -f "$MAP_FILE" ]]; then
@@ -131,7 +161,7 @@ write_tui_json() {
     --arg key "$issue_id" \
     --arg title "D.O ISSUE: $issue_id" \
     --arg cwd "$issue_dir" \
-    --arg url "https://www.drupal.org/i/$issue_id" \
+    --arg url "$ISSUE_URL" \
     --arg sess "$tmux_name" \
     '
     .[$key] //= {} |
@@ -150,7 +180,7 @@ launch_new_session() {
   local prefix
   prefix=$(build_prompt_prefix)
 
-  local skill_cmd="/drupal-issue https://www.drupal.org/i/$ISSUE_ID"
+  local skill_cmd="/drupal-issue $ISSUE_URL"
   if [[ "$GATE" == true ]]; then
     skill_cmd="$skill_cmd --pre-work-gate"
   fi
@@ -164,7 +194,7 @@ launch_new_session() {
   updated=$(jq --arg id "$ISSUE_ID" \
                --arg sid "$uuid" \
                --arg ts "$timestamp" \
-               --arg url "https://www.drupal.org/i/$ISSUE_ID" \
+               --arg url "$ISSUE_URL" \
                '.[$id] = {"session_id": $sid, "last_accessed": $ts, "url": $url}' \
                "$MAP_FILE")
   echo "$updated" > "$MAP_FILE"

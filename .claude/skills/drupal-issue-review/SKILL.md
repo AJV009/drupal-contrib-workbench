@@ -144,6 +144,12 @@ This replaces the need to re-read the issue from the browser. The answers to the
   diffs cannot be verified by reading code alone. A single class rename
   can break icon positioning. Always take desktop + mobile screenshots
   when the diff touches these files.
+- **Source awareness (dual issue sources).** `issue.json` carries a `source`
+  field: `"do"` or `"gitlab"`. The metadata fields you extract
+  (`status{code,label}`, version, component, priority) are identical across
+  both sources, so the version-detection and extraction tables below apply
+  unchanged. The issue URL comes from `issue.json["url"]` (for `gitlab` this
+  is the GitLab work-item). MR/fork setup is unchanged (always GitLab).
 
 ## Step 1: Read the Issue
 

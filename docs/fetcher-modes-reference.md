@@ -1,14 +1,14 @@
 # Mid-work Data Fetching Reference
 
 > Extracted from CLAUDE.md for readability. This is the full mode
-> table with dispatch examples for all 11 fetcher modes.
+> table with dispatch examples for all 12 fetcher modes.
 
 ## Mid-work Data Fetching (drupal-issue-fetcher multi-mode)
 
 The `drupal-issue-fetcher` agent is the single entry point for **all** data
 acquisition from drupal.org and git.drupalcode.org. It supports 11 modes
-under one dispatch contract. Any skill at any phase can dispatch it for
-fresh data — not just at the start of an issue.
+under one dispatch contract (12 with the `post-note` write mode). Any skill at
+any phase can dispatch it for fresh data — not just at the start of an issue.
 
 Invoke from the workbench root:
 
@@ -22,7 +22,7 @@ Or directly via Python for programmatic consumption:
 python3 scripts/lib/data/fetch_issue.py --mode <MODE> [args]
 ```
 
-### The 11 modes at a glance
+### The 12 modes at a glance
 
 | Mode           | Purpose                                             |
 |----------------|-----------------------------------------------------|
@@ -37,6 +37,30 @@ python3 scripts/lib/data/fetch_issue.py --mode <MODE> [args]
 | `mr-status`    | Pipeline state + mergeability (phar-backed)         |
 | `mr-logs`      | Failing job logs for an MR (phar-backed)            |
 | `raw-file`     | Arbitrary raw URL (composer.json, patch files)      |
+| `post-note`    | Post a GitLab issue Note (write mode)               |
+
+### Source resolution (`--source`)
+
+drupal.org is migrating issues from the legacy issue queue to GitLab
+work-items. A global `--source auto|do|gitlab` flag (default `auto`) controls
+how the fetcher resolves an issue:
+
+- `auto` (default): probe the bare number; a redirect to GitLab work-items
+  means the issue migrated (`source=gitlab`), otherwise it is legacy
+  (`source=do`)
+- `do`: force the legacy drupal.org issue queue
+- `gitlab`: force GitLab work-items
+
+`--source` is accepted by the data-layer modes: `full`, `refresh`, `delta`,
+`comments`, `related`, `issue-lookup`. (Phar-backed `mr-status` / `mr-logs`,
+`mr-diff`, and `raw-file` do not take it.)
+
+Accepted identifier forms for `--issue`:
+
+- bare number (legacy and migrated issues, resolved via redirect)
+- full work_items URL: `https://git.drupalcode.org/project/<name>/-/work_items/<iid>`
+- `project#iid` shorthand (required for NEW GitLab-native issues, whose small
+  per-project IIDs are not globally unique)
 
 ### Mid-work re-fetch examples
 
@@ -66,8 +90,9 @@ Returns JSON with `pipeline_id`, `status`, `pipeline_url`. Parse and decide.
   --project {project} --keywords "entity" "access" \
   --max-issues 200 --out -
 ```
-Returns JSON with match list. Useful mid-fix to catch "oh wait this is a
-duplicate of #NNNN".
+`search` is **dual-source**: it queries both the legacy d.o issue queue and
+GitLab issues (the named project plus a global search), and returns the merged
+match list. Useful mid-fix to catch "oh wait this is a duplicate of #NNNN".
 
 **4. "What does that referenced parent issue look like? I just need the title and status."**
 ```bash
@@ -103,6 +128,19 @@ Filters comments and discussions to items created/updated after `--since`.
   --gitlab-token-file git.drupalcode.org.key
 ```
 Equivalent to `full` with cache bypassed.
+
+**8. "Post my drafted reply as a Note on this GitLab issue."**
+```bash
+./scripts/fetch-issue --mode post-note \
+  --issue {iid} --project project/{name} \
+  --body-file {path/to/note.md} \
+  --gitlab-token-file git.drupalcode.org.key
+```
+Write mode (GitLab issues only). Required flags: `--issue <iid>`,
+`--project project/<name>`, `--body-file <path>`, `--gitlab-token-file
+git.drupalcode.org.key`. If the token is missing or read-only, it prints
+`PARTIAL: ...; post the note manually at <url>` and exits 1, so the draft is
+never lost.
 
 ### Stdout vs stderr discipline
 
