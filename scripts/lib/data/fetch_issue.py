@@ -31,6 +31,8 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from drupalorg_api import DrupalOrgAPI, get_status_label, get_priority_label, USER_AGENT
 from drupalorg_page_parser import DrupalOrgPageParser, PageFetchError
 from gitlab_api import GitLabAPI
+from gitlab_issues_api import GitLabIssuesAPI
+from gitlab_transform import transform_gitlab_issue, transform_gitlab_notes
 from raw_fetch import download_raw_file, RawFetchError
 
 
@@ -525,6 +527,9 @@ Use --out - to write JSON/text output to stdout (for stdout-emitting modes).
     )
     parser.add_argument("--issue", default=None,
                         help="Drupal.org issue URL or node ID")
+    parser.add_argument("--source", default="auto",
+                        choices=["auto", "do", "gitlab"],
+                        help="Issue source: auto-detect (default), legacy d.o queue, or GitLab work-item")
     parser.add_argument("--project", default=None,
                         help="Project machine name")
     parser.add_argument("--out", default=None,
@@ -642,7 +647,7 @@ def _phar_subprocess(args_list, out_target, log, label):
 # ============================================================================
 
 def mode_full(log, out_dir, project, issue_id, gitlab_token_file=None,
-              no_cache=False, since=None):
+              no_cache=False, since=None, source="do"):
     """
     Bulk fetch: issue + comments + MRs + diffs + discussions.
 
@@ -658,41 +663,55 @@ def mode_full(log, out_dir, project, issue_id, gitlab_token_file=None,
 
     Returns 0 on success, 1 on partial errors.
     """
-    # 1. Issue metadata
-    api = DrupalOrgAPI(offline=False)
-    if no_cache and hasattr(api, "_cache_dir"):
-        # Best-effort cache bypass: clear the cache dir for this run.
-        # DrupalOrgAPI doesn't expose a runtime no-cache flag, but the cache
-        # directory layout is opaque. Setting offline=False already does fresh
-        # fetches; the no-cache flag is forwarded for future use.
-        pass
-    raw = log.track("issue", lambda: api.get_issue(issue_id))
-    issue = transform_issue(raw, project)
-    write_json(out_dir / "issue.json", issue)
+    # 1-2. Issue + comments acquisition (source-specific).
+    if source == "gitlab":
+        gi = (GitLabIssuesAPI.from_token_file(gitlab_token_file)
+              if gitlab_token_file else GitLabIssuesAPI())
+        raw_issue = log.track("gitlab.issue", lambda: gi.get_issue(project, issue_id))
+        issue = transform_gitlab_issue(raw_issue, project=project)
+        write_json(out_dir / "issue.json", issue)
+        raw_notes = log.track("gitlab.notes", lambda: gi.get_issue_notes(project, issue_id))
+        events = log.track("gitlab.label_events",
+                           lambda: gi.get_resource_label_events(project, issue_id))
+        comments = transform_gitlab_notes(raw_notes, events, since=since)
+        comments_source = "gitlab"
+        hidden_branches = set()
+    else:
+        # 1. Issue metadata
+        api = DrupalOrgAPI(offline=False)
+        if no_cache and hasattr(api, "_cache_dir"):
+            # Best-effort cache bypass: clear the cache dir for this run.
+            # DrupalOrgAPI doesn't expose a runtime no-cache flag, but the cache
+            # directory layout is opaque. Setting offline=False already does fresh
+            # fetches; the no-cache flag is forwarded for future use.
+            pass
+        raw = log.track("issue", lambda: api.get_issue(issue_id))
+        issue = transform_issue(raw, project)
+        write_json(out_dir / "issue.json", issue)
 
-    # 2. Comments (page-first, API fallback)
-    comments, hidden_branches, comments_source = _fetch_comments(
-        api, project, issue_id, log
-    )
+        # 2. Comments (page-first, API fallback)
+        comments, hidden_branches, comments_source = _fetch_comments(
+            api, project, issue_id, log
+        )
 
-    # Backfill issue author name from first comment if available
-    if comments and issue["author"]["name"] is None:
-        first_author = comments[0].get("author", {})
-        if first_author.get("name"):
-            issue["author"]["name"] = first_author["name"]
-            write_json(out_dir / "issue.json", issue)
+        # Backfill issue author name from first comment if available
+        if comments and issue["author"]["name"] is None:
+            first_author = comments[0].get("author", {})
+            if first_author.get("name"):
+                issue["author"]["name"] = first_author["name"]
+                write_json(out_dir / "issue.json", issue)
 
-    # Delta filter on comments by created timestamp
-    if since:
-        try:
-            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-            comments = [
-                c for c in comments
-                if c.get("created") and
-                datetime.fromisoformat(c["created"].replace("Z", "+00:00")) > since_dt
-            ]
-        except (ValueError, TypeError):
-            log.error("delta_filter", f"Invalid --since value: {since}")
+        # Delta filter on comments by created timestamp
+        if since:
+            try:
+                since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+                comments = [
+                    c for c in comments
+                    if c.get("created") and
+                    datetime.fromisoformat(c["created"].replace("Z", "+00:00")) > since_dt
+                ]
+            except (ValueError, TypeError):
+                log.error("delta_filter", f"Invalid --since value: {since}")
 
     write_json(out_dir / "comments.json", {
         "issue_id": issue_id,
@@ -802,24 +821,35 @@ def mode_full(log, out_dir, project, issue_id, gitlab_token_file=None,
 # Mode: comments (lightweight: just issue + comments)
 # ============================================================================
 
-def mode_comments(log, out_dir, project, issue_id, since=None):
-    api = DrupalOrgAPI()
-    raw = log.track("issue", lambda: api.get_issue(issue_id))
-    issue = transform_issue(raw, project)
-    write_json(out_dir / "issue.json", issue)
+def mode_comments(log, out_dir, project, issue_id, since=None, source="do"):
+    if source == "gitlab":
+        gi = GitLabIssuesAPI()
+        raw_issue = log.track("gitlab.issue", lambda: gi.get_issue(project, issue_id))
+        issue = transform_gitlab_issue(raw_issue, project=project)
+        write_json(out_dir / "issue.json", issue)
+        raw_notes = log.track("gitlab.notes", lambda: gi.get_issue_notes(project, issue_id))
+        events = log.track("gitlab.label_events",
+                           lambda: gi.get_resource_label_events(project, issue_id))
+        comments = transform_gitlab_notes(raw_notes, events, since=since)
+        source = "gitlab"
+    else:
+        api = DrupalOrgAPI()
+        raw = log.track("issue", lambda: api.get_issue(issue_id))
+        issue = transform_issue(raw, project)
+        write_json(out_dir / "issue.json", issue)
 
-    comments, _hidden, source = _fetch_comments(api, project, issue_id, log)
+        comments, _hidden, source = _fetch_comments(api, project, issue_id, log)
 
-    if since:
-        try:
-            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-            comments = [
-                c for c in comments
-                if c.get("created") and
-                datetime.fromisoformat(c["created"].replace("Z", "+00:00")) > since_dt
-            ]
-        except (ValueError, TypeError):
-            log.error("delta_filter", f"Invalid --since value: {since}")
+        if since:
+            try:
+                since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+                comments = [
+                    c for c in comments
+                    if c.get("created") and
+                    datetime.fromisoformat(c["created"].replace("Z", "+00:00")) > since_dt
+                ]
+            except (ValueError, TypeError):
+                log.error("delta_filter", f"Invalid --since value: {since}")
 
     write_json(out_dir / "comments.json", {
         "issue_id": issue_id,
@@ -837,7 +867,22 @@ def mode_comments(log, out_dir, project, issue_id, since=None):
 # Mode: issue-lookup (lightest: just issue metadata, no MRs, no comments)
 # ============================================================================
 
-def mode_issue_lookup(log, project, issue_id, out_target):
+def mode_issue_lookup(log, project, issue_id, out_target, source="do"):
+    if source == "gitlab":
+        gi = GitLabIssuesAPI()
+        issue = transform_gitlab_issue(
+            log.track("gitlab.issue", lambda: gi.get_issue(project, issue_id)),
+            project=project,
+        )
+        log.finalize()
+        _emit_json({
+            "source": "gitlab",
+            "project": issue["project"],
+            "iid": int(issue["iid"]),
+            "title": issue["title"],
+            "status": issue["status"],
+        }, out_target)
+        return 0
     api = DrupalOrgAPI()
     raw = log.track("issue", lambda: api.get_issue(issue_id, include_mrs=False))
     issue = transform_issue(raw, project)
@@ -891,7 +936,42 @@ def mode_search(log, project, keywords, max_issues, out_target):
 # Mode: related (project's recent issues for context, migrates Step 4b curl)
 # ============================================================================
 
-def mode_related(log, out_dir, project, issue_id, max_issues):
+def mode_related(log, out_dir, project, issue_id, max_issues, source="do"):
+    if source == "gitlab":
+        gi = GitLabIssuesAPI()
+        issue = transform_gitlab_issue(
+            log.track("gitlab.issue", lambda: gi.get_issue(project, issue_id)),
+            project=project,
+        )
+        body = issue.get("body_html", "") or ""
+        short = project.split("/")[-1] if "/" in project else project
+        refs = {}
+        # <proj>#NNN cross-project references first.
+        for m in re.finditer(r"([A-Za-z0-9_]+)#(\d+)", body):
+            refs[(m.group(1), int(m.group(2)))] = True
+        # Bare #NNN references resolve to the current project.
+        for m in re.finditer(r"(?<![A-Za-z0-9_])#(\d+)", body):
+            refs[(short, int(m.group(1)))] = True
+
+        compact = []
+        for (proj, iid) in refs:
+            if proj == short and iid == int(issue["iid"]):
+                continue  # skip self
+            compact.append({
+                "project": proj,
+                "iid": iid,
+                "url": f"https://git.drupalcode.org/project/{proj}/-/work_items/{iid}",
+            })
+
+        write_json(out_dir / "related-issues.json", {
+            "issue_id": issue_id,
+            "project": short,
+            "total": len(compact),
+            "issues": compact,
+        })
+        log.finalize()
+        return 0
+
     api = DrupalOrgAPI()
     nid = log.track("project_nid", lambda: api.get_project_nid(project))
     if not nid:
@@ -1039,13 +1119,6 @@ def main():
     args = parse_args()
     log = FetchLog()
 
-    # Parse issue identifier (most modes need it)
-    issue_id = None
-    project = args.project
-    if args.issue:
-        parsed_project, issue_id = parse_issue_url(args.issue)
-        project = parsed_project or project
-
     # Validate required args per mode
     needs_project = {
         # Modes that hit the Python data layer directly need the project name
@@ -1058,6 +1131,33 @@ def main():
                    "issue-lookup", "mr-status", "mr-logs"}
     needs_mr_iid = {"mr-diff", "mr-status", "mr-logs"}
     needs_out_dir = {"full", "refresh", "delta", "comments", "related"}
+
+    # Resolve the issue identifier. For source-aware data-layer modes, use the
+    # source resolver (auto-detect d.o vs GitLab). Phar-backed modes
+    # (mr-status / mr-logs) just need the nid integer, so use the legacy parser.
+    issue_id = None
+    project = args.project
+    source_modes = {"full", "refresh", "delta", "comments", "related", "issue-lookup"}
+    if args.issue and args.mode in source_modes:
+        if args.source == "auto":
+            from source_resolver import resolve, ResolveError
+            try:
+                r = resolve(args.issue)
+            except ResolveError as e:
+                print(f"FAILED: {e}", file=sys.stderr)
+                sys.exit(2)
+            args.source = r["source"]
+            if r["source"] == "gitlab":
+                project = r["project"]
+            else:
+                project = project or r["project"]
+            issue_id = r["iid"]
+        else:
+            parsed_project, issue_id = parse_issue_url(args.issue)
+            project = parsed_project or project
+    elif args.issue:
+        parsed_project, issue_id = parse_issue_url(args.issue)
+        project = parsed_project or project
 
     if args.mode in needs_project and not project:
         print(f"ERROR: --project is required for mode '{args.mode}'", file=sys.stderr)
@@ -1083,24 +1183,31 @@ def main():
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Normalize unresolved "auto" (modes without an issue identifier) to "do".
+    source = args.source if args.source in ("do", "gitlab") else "do"
+
     # Dispatch
     if args.mode == "full":
         rc = mode_full(log, out_dir, project, issue_id,
-                       gitlab_token_file=args.gitlab_token_file)
+                       gitlab_token_file=args.gitlab_token_file, source=source)
     elif args.mode == "refresh":
         rc = mode_full(log, out_dir, project, issue_id,
-                       gitlab_token_file=args.gitlab_token_file, no_cache=True)
+                       gitlab_token_file=args.gitlab_token_file, no_cache=True,
+                       source=source)
     elif args.mode == "delta":
         rc = mode_full(log, out_dir, project, issue_id,
-                       gitlab_token_file=args.gitlab_token_file, since=args.since)
+                       gitlab_token_file=args.gitlab_token_file, since=args.since,
+                       source=source)
     elif args.mode == "comments":
-        rc = mode_comments(log, out_dir, project, issue_id, since=args.since)
+        rc = mode_comments(log, out_dir, project, issue_id, since=args.since,
+                           source=source)
     elif args.mode == "related":
-        rc = mode_related(log, out_dir, project, issue_id, args.max_issues)
+        rc = mode_related(log, out_dir, project, issue_id, args.max_issues,
+                          source=source)
     elif args.mode == "search":
         rc = mode_search(log, project, args.keywords, args.max_issues, args.out)
     elif args.mode == "issue-lookup":
-        rc = mode_issue_lookup(log, project, issue_id, args.out)
+        rc = mode_issue_lookup(log, project, issue_id, args.out, source=source)
     elif args.mode == "mr-diff":
         rc = mode_mr_diff(log, project, args.mr_iid, args.out,
                           gitlab_token_file=args.gitlab_token_file)
