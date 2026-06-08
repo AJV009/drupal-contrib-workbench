@@ -1,0 +1,82 @@
+{
+    "id": 12299,
+    "iid": 3542219,
+    "project_id": 19391,
+    "title": "Expand Playwright test coverage for XB AI module",
+    "description": ">>> [!note] Migrated issue\n<!-- Drupal.org comment -->\n<!-- Migrated from issue #3542219. -->\nReported by: [kunal.sachdev](https://www.drupal.org/user/3685163)\n\nRelated to !274\n\n>>>\n\n<h3 id=\"overview\">Overview</h3>\n<p>In <span class=\"drupalorg-gitlab-issue-link project-issue-status-info project-issue-status-7\"><a href=\"https://www.drupal.org/project/experience_builder/issues/3539554\" title=\"Status: Closed (fixed)\">#3539554: Add Playwright tests for XB AI module</a></span>, we introduced Playwright tests for the Canvas AI module. However, there are still several scenarios that have not yet been covered. This issue aims to expand the test suite to ensure broader coverage.</p>\n<p>Potential scenarios to cover:</p>\n<ul>\n<li>Page builder task</li>\n<li>Page history</li>\n<li>Test <code>current_layout</code>, <code>selected_component</code> value gets updated</li>\n<li>Also test <code>selected_component</code> value in above test</li>\n<li>All tests for node (article)</li>\n</ul>\n<p>(and add additional scenarios as needed)</p>\n<h3 id=\"proposed-resolution\">Proposed resolution</h3>\n<h3 id=\"ui-changes\">User interface changes</h3>\n\n> Related issue: [Issue #3539554](https://www.drupal.org/node/3539554)",
+    "state": "opened",
+    "created_at": "2025-08-20T11:55:09.000Z",
+    "updated_at": "2026-06-02T10:53:10.977Z",
+    "closed_at": null,
+    "closed_by": null,
+    "labels": [
+        "AI Initiative Sprint",
+        "AI Innovation",
+        "AI Page Generation",
+        "ai",
+        "category::task",
+        "priority::normal",
+        "state::needsWork",
+        "v1.x-dev"
+    ],
+    "milestone": null,
+    "assignees": [],
+    "author": {
+        "id": 2,
+        "username": "drupalbot",
+        "public_email": "",
+        "name": "drupalbot",
+        "state": "active",
+        "locked": false,
+        "avatar_url": null,
+        "web_url": "https://git.drupalcode.org/drupalbot"
+    },
+    "type": "ISSUE",
+    "assignee": null,
+    "user_notes_count": 31,
+    "merge_requests_count": 0,
+    "upvotes": 0,
+    "downvotes": 0,
+    "start_date": null,
+    "due_date": null,
+    "confidential": false,
+    "discussion_locked": null,
+    "issue_type": "issue",
+    "web_url": "https://git.drupalcode.org/project/canvas/-/work_items/3542219",
+    "time_stats": {
+        "time_estimate": 0,
+        "total_time_spent": 0,
+        "human_time_estimate": null,
+        "human_total_time_spent": null
+    },
+    "task_completion_status": {
+        "count": 0,
+        "completed_count": 0
+    },
+    "weight": null,
+    "blocking_issues_count": 0,
+    "has_tasks": true,
+    "task_status": "0 of 0 checklist items completed",
+    "_links": {
+        "self": "https://git.drupalcode.org/api/v4/projects/19391/issues/3542219",
+        "notes": "https://git.drupalcode.org/api/v4/projects/19391/issues/3542219/notes",
+        "award_emoji": "https://git.drupalcode.org/api/v4/projects/19391/issues/3542219/award_emoji",
+        "project": "https://git.drupalcode.org/api/v4/projects/19391",
+        "closed_as_duplicate_of": null
+    },
+    "references": {
+        "short": "#3542219",
+        "relative": "#3542219",
+        "full": "project/canvas#3542219"
+    },
+    "severity": "UNKNOWN",
+    "subscribed": true,
+    "moved_to_id": null,
+    "imported": false,
+    "imported_from": "none",
+    "service_desk_reply_to": null,
+    "epic_iid": null,
+    "epic": null,
+    "iteration": null,
+    "health_status": null
+}

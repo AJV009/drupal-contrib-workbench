@@ -1,0 +1,262 @@
+[
+    {
+        "id": 65527,
+        "user": {
+            "id": 2,
+            "username": "drupalbot",
+            "public_email": "",
+            "name": "drupalbot",
+            "state": "active",
+            "locked": false,
+            "avatar_url": null,
+            "web_url": "https://git.drupalcode.org/drupalbot"
+        },
+        "created_at": "2025-08-20T11:55:09.000Z",
+        "resource_type": "Issue",
+        "resource_id": 12299,
+        "label": {
+            "id": 5164,
+            "name": "priority::normal",
+            "description": "",
+            "text_color": "#FFFFFF",
+            "description_html": "",
+            "color": "#ff5353",
+            "archived": false
+        },
+        "action": "add"
+    },
+    {
+        "id": 65528,
+        "user": {
+            "id": 2,
+            "username": "drupalbot",
+            "public_email": "",
+            "name": "drupalbot",
+            "state": "active",
+            "locked": false,
+            "avatar_url": null,
+            "web_url": "https://git.drupalcode.org/drupalbot"
+        },
+        "created_at": "2025-08-20T11:55:09.000Z",
+        "resource_type": "Issue",
+        "resource_id": 12299,
+        "label": {
+            "id": 5170,
+            "name": "category::task",
+            "description": "",
+            "text_color": "#FFFFFF",
+            "description_html": "",
+            "color": "#2e2ea3",
+            "archived": false
+        },
+        "action": "add"
+    },
+    {
+        "id": 65529,
+        "user": {
+            "id": 2,
+            "username": "drupalbot",
+            "public_email": "",
+            "name": "drupalbot",
+            "state": "active",
+            "locked": false,
+            "avatar_url": null,
+            "web_url": "https://git.drupalcode.org/drupalbot"
+        },
+        "created_at": "2025-08-20T11:55:09.000Z",
+        "resource_type": "Issue",
+        "resource_id": 12299,
+        "label": {
+            "id": 5175,
+            "name": "state::needsReview",
+            "description": "",
+            "text_color": "#FFFFFF",
+            "description_html": "",
+            "color": "#c535ca",
+            "archived": false
+        },
+        "action": "add"
+    },
+    {
+        "id": 65530,
+        "user": {
+            "id": 2,
+            "username": "drupalbot",
+            "public_email": "",
+            "name": "drupalbot",
+            "state": "active",
+            "locked": false,
+            "avatar_url": null,
+            "web_url": "https://git.drupalcode.org/drupalbot"
+        },
+        "created_at": "2025-08-20T11:55:09.000Z",
+        "resource_type": "Issue",
+        "resource_id": 12299,
+        "label": {
+            "id": 5189,
+            "name": "v1.x-dev",
+            "description": "",
+            "text_color": "#FFFFFF",
+            "description_html": "",
+            "color": "#f68904",
+            "archived": false
+        },
+        "action": "add"
+    },
+    {
+        "id": 65531,
+        "user": {
+            "id": 2,
+            "username": "drupalbot",
+            "public_email": "",
+            "name": "drupalbot",
+            "state": "active",
+            "locked": false,
+            "avatar_url": null,
+            "web_url": "https://git.drupalcode.org/drupalbot"
+        },
+        "created_at": "2025-08-20T11:55:09.000Z",
+        "resource_type": "Issue",
+        "resource_id": 12299,
+        "label": {
+            "id": 5271,
+            "name": "ai",
+            "description": "",
+            "text_color": "#FFFFFF",
+            "description_html": "",
+            "color": "#29a1b1",
+            "archived": false
+        },
+        "action": "add"
+    },
+    {
+        "id": 65532,
+        "user": {
+            "id": 2,
+            "username": "drupalbot",
+            "public_email": "",
+            "name": "drupalbot",
+            "state": "active",
+            "locked": false,
+            "avatar_url": null,
+            "web_url": "https://git.drupalcode.org/drupalbot"
+        },
+        "created_at": "2025-08-20T11:55:09.000Z",
+        "resource_type": "Issue",
+        "resource_id": 12299,
+        "label": {
+            "id": 5278,
+            "name": "AI Innovation",
+            "description": null,
+            "text_color": "#1F1E24",
+            "description_html": "",
+            "color": "#ffc423",
+            "archived": false
+        },
+        "action": "add"
+    },
+    {
+        "id": 65533,
+        "user": {
+            "id": 2,
+            "username": "drupalbot",
+            "public_email": "",
+            "name": "drupalbot",
+            "state": "active",
+            "locked": false,
+            "avatar_url": null,
+            "web_url": "https://git.drupalcode.org/drupalbot"
+        },
+        "created_at": "2025-08-20T11:55:09.000Z",
+        "resource_type": "Issue",
+        "resource_id": 12299,
+        "label": {
+            "id": 5279,
+            "name": "AI Initiative Sprint",
+            "description": null,
+            "text_color": "#1F1E24",
+            "description_html": "",
+            "color": "#ffc423",
+            "archived": false
+        },
+        "action": "add"
+    },
+    {
+        "id": 65534,
+        "user": {
+            "id": 2,
+            "username": "drupalbot",
+            "public_email": "",
+            "name": "drupalbot",
+            "state": "active",
+            "locked": false,
+            "avatar_url": null,
+            "web_url": "https://git.drupalcode.org/drupalbot"
+        },
+        "created_at": "2025-08-20T11:55:09.000Z",
+        "resource_type": "Issue",
+        "resource_id": 12299,
+        "label": {
+            "id": 5280,
+            "name": "AI Page Generation",
+            "description": null,
+            "text_color": "#1F1E24",
+            "description_html": "",
+            "color": "#ffc423",
+            "archived": false
+        },
+        "action": "add"
+    },
+    {
+        "id": 164690,
+        "user": {
+            "id": 2,
+            "username": "drupalbot",
+            "public_email": "",
+            "name": "drupalbot",
+            "state": "active",
+            "locked": false,
+            "avatar_url": null,
+            "web_url": "https://git.drupalcode.org/drupalbot"
+        },
+        "created_at": "2026-06-02T10:53:27.261Z",
+        "resource_type": "Issue",
+        "resource_id": 12299,
+        "label": {
+            "id": 5176,
+            "name": "state::needsWork",
+            "description": "",
+            "text_color": "#FFFFFF",
+            "description_html": "",
+            "color": "#c535ca",
+            "archived": false
+        },
+        "action": "add"
+    },
+    {
+        "id": 164691,
+        "user": {
+            "id": 2,
+            "username": "drupalbot",
+            "public_email": "",
+            "name": "drupalbot",
+            "state": "active",
+            "locked": false,
+            "avatar_url": null,
+            "web_url": "https://git.drupalcode.org/drupalbot"
+        },
+        "created_at": "2026-06-02T10:53:27.261Z",
+        "resource_type": "Issue",
+        "resource_id": 12299,
+        "label": {
+            "id": 5175,
+            "name": "state::needsReview",
+            "description": "",
+            "text_color": "#FFFFFF",
+            "description_html": "",
+            "color": "#c535ca",
+            "archived": false
+        },
+        "action": "remove"
+    }
+]
