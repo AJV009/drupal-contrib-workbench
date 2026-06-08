@@ -28,6 +28,10 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+# Default cap for d.o batch issue scanning in search mode. mode_search
+# overrides this from its max_issues argument before calling _search_do.
+DEFAULT_SEARCH_MAX_ISSUES = 200
+
 from drupalorg_api import DrupalOrgAPI, get_status_label, get_priority_label, USER_AGENT
 from drupalorg_page_parser import DrupalOrgPageParser, PageFetchError
 from gitlab_api import GitLabAPI
@@ -895,17 +899,27 @@ def mode_issue_lookup(log, project, issue_id, out_target, source="do"):
 # Mode: search (client-side keyword match against project issue batch)
 # ============================================================================
 
-def mode_search(log, project, keywords, max_issues, out_target):
-    api = DrupalOrgAPI()
-    nid = log.track("project_nid", lambda: api.get_project_nid(project))
-    if not nid:
-        _emit_error_json(f"Could not resolve project '{project}'", out_target)
-        return 2
+def _search_do(project, keywords):
+    """Search the d.o issue queue by title keywords (AND-matched).
 
-    issues = log.track(
-        "batch_fetch",
-        lambda: api.fetch_issues_batch(nid, max_issues=max_issues),
-    )
+    Args:
+        project: Full project path (e.g., 'project/canvas').
+        keywords: List of keyword strings or a single search string.
+
+    Returns:
+        List of normalized match dicts (id, title, url, ...).
+
+    Raises:
+        Exception: If the project cannot be resolved.
+    """
+    if isinstance(keywords, str):
+        keywords = keywords.split()
+    api = DrupalOrgAPI()
+    nid = api.get_project_nid(project)
+    if not nid:
+        raise ValueError(f"Could not resolve project '{project}'")
+
+    issues = api.fetch_issues_batch(nid, max_issues=DEFAULT_SEARCH_MAX_ISSUES)
 
     keywords_lower = [k.lower() for k in keywords]
     matched = []
@@ -913,6 +927,7 @@ def mode_search(log, project, keywords, max_issues, out_target):
         title = raw.get("title", "").lower()
         if all(k in title for k in keywords_lower):
             matched.append({
+                "id": str(raw.get("nid", 0)),
                 "nid": int(raw.get("nid", 0)),
                 "title": raw.get("title", ""),
                 "status_code": raw.get("field_issue_status"),
@@ -920,14 +935,54 @@ def mode_search(log, project, keywords, max_issues, out_target):
                 "url": f"https://www.drupal.org/node/{raw.get('nid')}",
                 "changed": unix_to_iso(raw.get("changed")),
             })
+    return matched
+
+
+def search_all(project, keywords, gitlab_token_file=None):
+    """Search both the d.o issue queue and GitLab issues; merge + dedupe gitlab by iid."""
+    results = []
+    try:
+        for r in _search_do(project, keywords):
+            r.setdefault("source", "do")
+            results.append(r)
+    except Exception as e:  # one source failing must not kill the other
+        results.append({"source": "do", "error": str(e)})
+    gi = (GitLabIssuesAPI.from_token_file(gitlab_token_file)
+          if gitlab_token_file else GitLabIssuesAPI())
+    seen = set()
+    for finder, scope in ((gi.search_project_issues, project), (gi.search_global_issues, None)):
+        try:
+            hits = finder(scope, keywords) if scope else finder(keywords)
+        except Exception:
+            hits = []
+        for h in hits:
+            key = ("gitlab", h.get("iid"))
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append({"source": "gitlab", "id": str(h.get("iid")),
+                            "title": h.get("title"), "url": h.get("web_url")})
+    return results
+
+
+def mode_search(log, project, keywords, max_issues, out_target, gitlab_token_file=None):
+    global DEFAULT_SEARCH_MAX_ISSUES
+    DEFAULT_SEARCH_MAX_ISSUES = max_issues
+    results = log.track(
+        "search_all",
+        lambda: search_all(project, keywords, gitlab_token_file=gitlab_token_file),
+    )
+    matches = [r for r in results if "error" not in r]
+    errors = [r for r in results if "error" in r]
+    for err in errors:
+        log.error("search", f"{err['source']}: {err['error']}")
 
     log.finalize()
     _emit_json({
         "project": project,
         "keywords": keywords,
-        "total_scanned": len(issues),
-        "match_count": len(matched),
-        "matches": matched,
+        "match_count": len(matches),
+        "matches": matches,
     }, out_target)
     return 0
 
@@ -1205,7 +1260,8 @@ def main():
         rc = mode_related(log, out_dir, project, issue_id, args.max_issues,
                           source=source)
     elif args.mode == "search":
-        rc = mode_search(log, project, args.keywords, args.max_issues, args.out)
+        rc = mode_search(log, project, args.keywords, args.max_issues, args.out,
+                         gitlab_token_file=args.gitlab_token_file)
     elif args.mode == "issue-lookup":
         rc = mode_issue_lookup(log, project, issue_id, args.out, source=source)
     elif args.mode == "mr-diff":
